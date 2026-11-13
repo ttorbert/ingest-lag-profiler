@@ -34,7 +34,7 @@ A rule searches a fixed window back from each run. An event that arrives after t
 - Changing rules automatically. The profiler recommends, and a person decides.
 - Supporting machine learning rules, which don't use this kind of search window.
 - Parsing ES|QL rule queries to find their indices. These rules are listed as unsupported.
-- Measuring lag that happens before an event gets an ingest timestamp, such as a source that holds events before sending them. The profiler only sees lag that the two timestamps capture.
+- Measuring delay that happens before an event's `@timestamp` is set, for example when a collector stamps events on receipt rather than when they happened. The profiler only sees lag between `@timestamp` and `event.ingested`.
 - A free edition for licenses without Workflows.
 
 ### What the estimate means

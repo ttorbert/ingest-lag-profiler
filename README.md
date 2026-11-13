@@ -16,6 +16,16 @@ The dashboard's *Rule coverage* panel shows which group each rule is in.
 
 **Cost.** The hourly miss-rate query takes about 1 second per million events in the hour on a single-node laptop lab, however many rules search each stream.
 
+## Documentation
+
+| Guide | For |
+| --- | --- |
+| [Why use it](docs/value.md) | Business and operational value, costs and limits |
+| [Setup guide](docs/setup-guide.md) | Installing it in an Elastic deployment, step by step |
+| [User guide](docs/user-guide.md) | Reading the dashboard and acting on findings |
+| [Validation results](docs/validation-results.md) | How the estimates were tested against real rules |
+| [Field reference](docs/fields.md) | Every field in the `lagprof-*` indices |
+
 ## Requirements
 
 | | |
