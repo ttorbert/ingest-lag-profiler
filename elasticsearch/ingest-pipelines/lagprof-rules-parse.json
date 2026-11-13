@@ -1,0 +1,34 @@
+{
+  "description": "Ingest Lag Profiler: parse a detection rule's schedule, index patterns and timestamp field, and decide whether the profiler supports it.",
+  "processors": [
+    {
+      "set": {
+        "tag": "lagprof-rule-seen-at",
+        "field": "@timestamp",
+        "value": "{{{_ingest.timestamp}}}",
+        "description": "When this run saw the rule. Lets dashboard panels with a time range show rules."
+      }
+    },
+    {
+      "script": {
+        "lang": "painless",
+        "tag": "lagprof-parse-rule",
+        "source": "long toSeconds(def raw) { if (raw == null) { return -1L; } String s = raw.toString().trim(); if (s.length() < 2) { return -1L; } String unit = s.substring(s.length() - 1); String num = s.substring(0, s.length() - 1); for (int i = 0; i < num.length(); i++) { if (!Character.isDigit(num.charAt(i))) { return -1L; } } long n = Long.parseLong(num); if (unit == 's') { return n; } if (unit == 'm') { return n * 60L; } if (unit == 'h') { return n * 3600L; } if (unit == 'd') { return n * 86400L; } return -1L; }\n\nif (ctx.lagprof == null || ctx.lagprof.rule == null) { throw new IllegalArgumentException('missing lagprof.rule'); }\nMap r = ctx.lagprof.rule;\n\n// Workflow templates render missing values as empty strings or 'null'. Treat those as missing.\nfor (String k : ['type', 'interval_raw', 'from_raw', 'index_patterns', 'data_view_id', 'timestamp_override', 'timestamp_override_fallback_disabled']) {\n  def v = r.get(k);\n  if (v instanceof String) { String t = ((String) v).trim(); if (t == '' || t == 'null' || t == 'undefined' || t == 'None' || t == '[]') { r.remove(k); } }\n}\n\n// Index patterns may arrive as a list, or as a string such as 'a,b' or '[\"a\",\"b\"]'.\nList pats = new ArrayList();\ndef rawPats = r.get('index_patterns');\nif (rawPats instanceof List) { for (def p : rawPats) { if (p != null) { pats.add(p.toString().trim()); } } }\nelse if (rawPats != null) { String t = rawPats.toString().replace('[', '').replace(']', '').replace('\"', ''); for (String p : t.splitOnToken(',')) { pats.add(p.trim()); } }\nList local = new ArrayList();\nboolean remoteSkipped = false;\nfor (String p : pats) { if (p == '') { continue; } if (p.contains(':')) { remoteSkipped = true; } else { local.add(p); } }\nr.index_patterns = pats;\nr.index_patterns_csv = String.join(',', local);\nr.remote_patterns_skipped = remoteSkipped;\n\ndef fb = r.get('timestamp_override_fallback_disabled');\nif (fb instanceof String) { r.timestamp_override_fallback_disabled = ((String) fb).trim().equalsIgnoreCase('true'); }\n\nlong interval = toSeconds(r.get('interval_raw'));\nlong lookback = -1L;\ndef from = r.get('from_raw');\nif (from != null && from.toString().trim().startsWith('now-')) { lookback = toSeconds(from.toString().trim().substring(4)); }\nif (interval > 0) { r.interval_s = interval; }\nif (lookback > 0) { r.lookback_s = lookback; }\n\nr.timestamp_field = r.get('timestamp_override') != null ? r.get('timestamp_override').toString() : '@timestamp';\n\nString reason = null;\ndef type = r.get('type');\nif (type == 'machine_learning') { reason = 'machine learning rule'; }\nelse if (type == 'esql') { reason = 'ES|QL rule'; }\nelse if (local.isEmpty()) {\n  if (r.get('data_view_id') != null) { reason = 'uses a data view (not resolved in this version)'; }\n  else if (remoteSkipped) { reason = 'only remote cluster index patterns'; }\n  else { reason = 'no index patterns'; }\n}\nelse if (interval <= 0) { reason = 'interval could not be parsed'; }\nelse if (lookback <= 0) { reason = 'from could not be parsed'; }\n\nr.supported = reason == null;\nif (reason != null) { r.unsupported_reason = reason; } else { r.remove('unsupported_reason'); }"
+      }
+    }
+  ],
+  "on_failure": [
+    {
+      "set": {
+        "field": "lagprof.rule.supported",
+        "value": false
+      }
+    },
+    {
+      "set": {
+        "field": "lagprof.rule.unsupported_reason",
+        "value": "parse error: {{ _ingest.on_failure_message }}"
+      }
+    }
+  ]
+}

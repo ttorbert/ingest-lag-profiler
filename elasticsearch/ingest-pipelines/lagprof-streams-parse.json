@@ -1,0 +1,23 @@
+{
+  "description": "Ingest Lag Profiler: split a data stream name (type-dataset-namespace) into the fields the miss-rate query joins on. A name that doesn't fit is kept with lagprof.parse_error and never joins, so one odd name can't fail a whole workflow run.",
+  "processors": [
+    {
+      "dissect": {
+        "tag": "lagprof-split-stream-name",
+        "field": "data_stream.name",
+        "pattern": "%{data_stream.type}-%{data_stream.dataset}-%{data_stream.namespace}"
+      }
+    },
+    {
+      "script": {
+        "lang": "painless",
+        "tag": "lagprof-check-namespace",
+        "source": "if (ctx.data_stream.namespace.contains('-')) { throw new IllegalArgumentException('data stream name has more than three parts: ' + ctx.data_stream.name); }"
+      }
+    }
+  ],
+  "on_failure": [
+    { "remove": { "field": ["data_stream.type", "data_stream.dataset", "data_stream.namespace"], "ignore_missing": true } },
+    { "set": { "field": "lagprof.parse_error", "value": "{{ _ingest.on_failure_message }}" } }
+  ]
+}

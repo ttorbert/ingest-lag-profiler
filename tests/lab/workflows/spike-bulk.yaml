@@ -1,0 +1,24 @@
+name: lagprof-spike-bulk
+description: Milestone 0 spike. Can elasticsearch.request send an NDJSON _bulk body built with a Liquid loop?
+enabled: true
+triggers:
+  - type: manual
+steps:
+  - name: q
+    type: elasticsearch.request
+    with:
+      method: POST
+      path: /_query
+      body:
+        query: "FROM lagprof-host-lag | KEEP host.name, data_stream.dataset, lag_p95_s | SORT host.name, data_stream.dataset | LIMIT 5"
+  - name: bulk
+    type: elasticsearch.request
+    with:
+      method: POST
+      path: /_bulk?refresh=true
+      headers:
+        Content-Type: application/x-ndjson
+      body: |
+        {% for row in steps.q.output.values %}{"create":{"_index":"lagprof-spike-bulk","_id":"{{ row[0] }}:{{ row[1] }}"}}
+        {"host":"{{ row[0] }}","dataset":"{{ row[1] }}","p95":{{ row[2] }},"run":"{{ execution.id }}"}
+        {% endfor %}

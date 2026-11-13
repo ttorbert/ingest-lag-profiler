@@ -1,0 +1,59 @@
+{
+  "_lagprof_notes": [
+    "Sent to the Kibana role API (PUT /api/security/role/lagprof-workflow). Keys starting with _lagprof are removed before sending.",
+    "The installer replaces __SPACES__ with [\"*\"] for the all-spaces workflow, or [\"<space id>\"] for a per-space copy.",
+    "Confirmed on 9.5.6: a workflow's scheduled runs use the identity of the account that last saved it; manual runs use whoever starts them. This role is enough for a full run.",
+    "So give this role to a dedicated user, create an API key as that user, and set LAGPROF_WORKFLOW_API_KEY so the installer saves the workflow with it. That's why the role can create and update workflows (not delete).",
+    "Feature IDs (GET /api/features on 9.5.6): securitySolutionRulesV4 and workflowsManagement. siemV2 is outdated; Kibana accepts it silently.",
+    "manage_own_api_key lets the dedicated user create the API key that owns the workflow. It covers only that user's own keys."
+  ],
+  "elasticsearch": {
+    "cluster": [
+      "manage_own_api_key"
+    ],
+    "indices": [
+      {
+        "names": [
+          "logs-*"
+        ],
+        "privileges": [
+          "read",
+          "view_index_metadata"
+        ]
+      },
+      {
+        "names": [
+          "lagprof-*"
+        ],
+        "privileges": [
+          "read",
+          "write",
+          "delete",
+          "create_index",
+          "auto_configure",
+          "maintenance",
+          "view_index_metadata"
+        ]
+      }
+    ]
+  },
+  "kibana": [
+    {
+      "base": [],
+      "feature": {
+        "securitySolutionRulesV4": [
+          "read"
+        ],
+        "workflowsManagement": [
+          "minimal_read",
+          "workflow_read",
+          "workflow_create",
+          "workflow_update",
+          "workflow_execute",
+          "workflow_execution_read"
+        ]
+      },
+      "spaces": "__SPACES__"
+    }
+  ]
+}

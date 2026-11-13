@@ -1,0 +1,16 @@
+FROM logs-*
+| WHERE @timestamp >= DATE_TRUNC(1 hour, NOW()) - 25 hours
+    AND event.ingested >= DATE_TRUNC(1 hour, NOW()) - 1 hour
+    AND event.ingested <  DATE_TRUNC(1 hour, NOW())
+| EVAL lag_s = DATE_DIFF("seconds", @timestamp, event.ingested)
+| STATS events = COUNT(*),
+        lag_p95_s = PERCENTILE(lag_s, 95),
+        lag_max_s = MAX(lag_s),
+        negative_lag_events = SUM(CASE(lag_s < -60, 1, 0))
+     BY data_stream.dataset, data_stream.namespace, host.name
+| WHERE lag_p95_s > 60 OR negative_lag_events > 0
+| EVAL window_start = DATE_TRUNC(1 hour, NOW()) - 1 hour
+| KEEP window_start, data_stream.dataset, data_stream.namespace, host.name,
+       events, lag_p95_s, lag_max_s, negative_lag_events
+| SORT lag_p95_s DESC
+| LIMIT 10000

@@ -1,0 +1,363 @@
+# lagprof-hourly (per space)
+#
+# One copy of this workflow per Kibana space. Each copy profiles only the rules
+# in its own space. Before importing a copy (the installer does this for you):
+#   1. Set consts.space_id to the space it runs in.
+#   2. Set consts.write_shared_stats to true in EXACTLY ONE copy. Stream stats
+#      and host lag come from raw logs, not rules, so they're the same for every
+#      space. Only one copy needs to write them.
+# See README.md in this folder for how this compares to the all-spaces version.
+#
+# Tested on 9.5.6 in the Rancher Desktop lab. The template conventions are listed
+# at the top of lagprof-hourly-all-spaces.yaml.
+
+name: lagprof-hourly-space-CHANGEME
+description: Ingest Lag Profiler. Estimates detection rule miss rates from ingest lag, for one space.
+enabled: true
+tags: [lagprof]
+
+consts:
+  space_id: default            # CHANGE: the ID of the space this copy runs in
+  write_shared_stats: true     # CHANGE: true in exactly one copy, false in all others
+
+triggers:
+  - type: scheduled
+    with:
+      every: 1h
+
+settings:
+  on-failure:
+    fallback:
+      - name: record_failure
+        type: elasticsearch.request
+        with:
+          method: POST
+          path: /lagprof-runs/_doc?pipeline=lagprof-stamp
+          body:
+            lagprof:
+              run: { id: "{{ execution.id }}" }
+              space: { id: "{{ consts.space_id }}" }
+              mode: per-space
+            status: failed
+            error: "{{ error.message }}"
+
+steps:
+  # ---------------------------------------------------------------------------
+  # Stage 1 and 2: collect this space's enabled rules and save them.
+  # ---------------------------------------------------------------------------
+  - name: get_rules
+    type: kibana.request
+    # Rules average about 4.5 KB; the 10 MB default step limit fails at about 2,300 rules.
+    max-step-size: 64mb
+    with:
+      method: GET
+      # The space is explicit in the path, so a copy imported into the wrong
+      # space still reads the space named in consts.
+      path: >-
+        {% if consts.space_id != 'default' %}/s/{{ consts.space_id }}{% endif %}/api/detection_engine/rules/_find?per_page=10000&page=1&filter=alert.attributes.enabled:true
+
+  - name: save_rules
+    type: elasticsearch.request
+    with:
+      method: POST
+      path: /_bulk?refresh=wait_for
+      headers:
+        Content-Type: application/x-ndjson
+      body: |
+        {"delete":{"_index":"lagprof-rules","_id":"__lagprof_noop__"}}
+        {% for r in steps.get_rules.output.data %}{"index":{"_index":"lagprof-rules","_id":{{ r.id | json }},"pipeline":"lagprof-rules-parse"}}
+        {"lagprof":{"run":{"id":"{{ execution.id }}"},"space":{"id":{{ consts.space_id | json }}},"rule":{"id":{{ r.id | json }},"rule_id":{{ r.rule_id | default: "" | json }},"name":{{ r.name | default: "" | json }},"type":{{ r.type | default: "" | json }},"interval_raw":{{ r.interval | default: "" | json }},"from_raw":{{ r.from | default: "" | json }},"index_patterns":{{ r.index | default: "" | json }},"data_view_id":{{ r.data_view_id | default: "" | json }},"timestamp_override":{{ r.timestamp_override | default: "" | json }},"timestamp_override_fallback_disabled":{{ r.timestamp_override_fallback_disabled | default: "" | json }}}}}
+        {% endfor %}
+
+  - name: check_save_rules
+    type: if
+    condition: "steps.save_rules.output.errors : true"
+    steps:
+      - name: save_rules_failed
+        type: elasticsearch.request
+        with:
+          method: GET
+          # Fails on purpose: stops the run so the failure fallback records why.
+          path: /_lagprof_error/rule_bulk_write_failed_see_step_save_rules
+
+  # ---------------------------------------------------------------------------
+  # Stage 3: expand each supported rule's index patterns into data streams.
+  # The rules parse pipeline decides what is supported, so read the rules back.
+  # ---------------------------------------------------------------------------
+  - name: get_supported_rules
+    type: elasticsearch.request
+    with:
+      method: POST
+      path: /lagprof-rules/_search
+      body:
+        size: 10000
+        _source: [lagprof]
+        query:
+          bool:
+            filter:
+              - term: { lagprof.run.id: "{{ execution.id }}" }
+              - term: { lagprof.rule.supported: true }
+
+  - name: for_each_rule
+    type: foreach
+    foreach: "${{ steps.get_supported_rules.output.hits.hits }}"
+    steps:
+      - name: resolve_streams
+        type: elasticsearch.request
+        with:
+          method: GET
+          # Only data_streams in the response are used; backing .ds- indices and aliases are ignored.
+          path: "/_resolve/index/{{ foreach.item._source.lagprof.rule.index_patterns_csv }}?expand_wildcards=open&ignore_unavailable=true&allow_no_indices=true"
+
+      - name: save_pairs
+        type: elasticsearch.request
+        with:
+          method: POST
+          path: /_bulk
+          headers:
+            Content-Type: application/x-ndjson
+          body: |
+            {"delete":{"_index":"lagprof-rule-streams","_id":"__lagprof_noop__"}}
+            {% for ds in steps.resolve_streams.output.data_streams %}{"index":{"_index":"lagprof-rule-streams","_id":"{{ foreach.item._id }}:{{ ds.name }}","pipeline":"lagprof-streams-parse"}}
+            {"data_stream":{"name":{{ ds.name | json }}},"lagprof":{"run":{"id":"{{ execution.id }}"},"space":{"id":{{ foreach.item._source.lagprof.space.id | json }}},"rule":{"id":{{ foreach.item._source.lagprof.rule.id | json }},"name":{{ foreach.item._source.lagprof.rule.name | default: "" | json }},"interval_s":{{ foreach.item._source.lagprof.rule.interval_s | json }},"lookback_s":{{ foreach.item._source.lagprof.rule.lookback_s | json }},"timestamp_field":{{ foreach.item._source.lagprof.rule.timestamp_field | json }}}}}
+            {% endfor %}
+
+      - name: check_save_pairs
+        type: if
+        condition: "steps.save_pairs.output.errors : true"
+        steps:
+          - name: save_pairs_failed
+            type: elasticsearch.request
+            with:
+              method: GET
+              # Fails on purpose: stops the run so the failure fallback records why.
+              path: /_lagprof_error/pair_bulk_write_failed_see_step_save_pairs
+
+  - name: refresh_pairs
+    type: elasticsearch.request
+    with:
+      method: POST
+      path: /lagprof-rule-streams/_refresh
+
+  # ---------------------------------------------------------------------------
+  # Stage 4: remove rules and pairs from earlier runs (disabled or deleted rules,
+  # removed data streams). Reached only if stages 1 to 3 succeeded.
+  # ---------------------------------------------------------------------------
+  - name: delete_stale
+    type: elasticsearch.request
+    with:
+      method: POST
+      path: /lagprof-rules,lagprof-rule-streams/_delete_by_query?refresh=true&conflicts=proceed
+      body:
+        query:
+          bool:
+            # Without the space filter, each copy would delete every other space's pairs.
+            filter:
+              - term: { lagprof.space.id: "{{ consts.space_id }}" }
+            must_not:
+              - term: { lagprof.run.id: "{{ execution.id }}" }
+
+  # ---------------------------------------------------------------------------
+  # Stage 5 and 6: run the queries and save the rows.
+  # Each query ends with KEEP, so the row positions below are fixed.
+  # Windows are whole clock hours, and document IDs are built from the window,
+  # so rerunning an hour skips rows that already exist.
+  # ---------------------------------------------------------------------------
+  - name: miss_rates
+    type: elasticsearch.request
+    with:
+      method: POST
+      path: /_query
+      body:
+        query: |
+          FROM logs-*
+          | WHERE @timestamp >= DATE_TRUNC(1 hour, NOW()) - 25 hours
+              AND event.ingested >= DATE_TRUNC(1 hour, NOW()) - 1 hour
+              AND event.ingested <  DATE_TRUNC(1 hour, NOW())
+          | EVAL lag_s = DATE_DIFF("seconds", @timestamp, event.ingested)
+          // Per-stream lag figures, computed once on raw events. Named so they don't collide
+          // with fields in the lookup index, which would replace them in the join.
+          | INLINE STATS stream_p50 = PERCENTILE(lag_s, 50),
+                         stream_p95 = PERCENTILE(lag_s, 95),
+                         stream_p99 = PERCENTILE(lag_s, 99),
+                         stream_max = MAX(lag_s)
+               BY data_stream.dataset, data_stream.namespace
+          // Count events per stream and lag second, so rules join to counts, not raw events.
+          // Lags over 2 hours are grouped by minute.
+          | EVAL lag_s = CASE(lag_s > 7200, lag_s - lag_s % 60, lag_s)
+          | STATS n = COUNT(*)
+               BY data_stream.dataset, data_stream.namespace, lag_s,
+                  stream_p50, stream_p95, stream_p99, stream_max
+          | LOOKUP JOIN lagprof-rule-streams ON data_stream.dataset, data_stream.namespace
+          | WHERE lagprof.space.id == ?space_id
+              AND lagprof.rule.id IS NOT NULL
+              AND lagprof.rule.timestamp_field == "@timestamp"
+          | EVAL margin_s = lagprof.rule.lookback_s - lagprof.rule.interval_s
+          | EVAL miss = CASE(lag_s <= margin_s, 0.0,
+                             lag_s >= lagprof.rule.lookback_s, 1.0,
+                             TO_DOUBLE(lag_s - margin_s) / lagprof.rule.interval_s)
+          | STATS events = SUM(n),
+                  est_missed = SUM(n * miss),
+                  negative_lag_events = SUM(CASE(lag_s < -60, n, 0)),
+                  lag_p50_s = MAX(stream_p50),
+                  lag_p95_s = MAX(stream_p95),
+                  lag_p99_s = MAX(stream_p99),
+                  lag_max_s = MAX(stream_max)
+               BY lagprof.space.id, lagprof.rule.id, lagprof.rule.name,
+                  lagprof.rule.interval_s, lagprof.rule.lookback_s,
+                  data_stream.dataset, data_stream.namespace
+          | EVAL window_start = DATE_TRUNC(1 hour, NOW()) - 1 hour,
+                 miss_rate_pct = ROUND(est_missed / events * 100, 2),
+                 recommended_lookback_s = GREATEST(
+                   lagprof.rule.interval_s + 60,
+                   lagprof.rule.interval_s + TO_INTEGER(CEIL(lag_p99_s / 60.0)) * 60)
+          | KEEP window_start, lagprof.space.id, lagprof.rule.id, lagprof.rule.name,
+                 lagprof.rule.interval_s, lagprof.rule.lookback_s,
+                 data_stream.dataset, data_stream.namespace,
+                 events, est_missed, miss_rate_pct,
+                 lag_p50_s, lag_p95_s, lag_p99_s, lag_max_s,
+                 negative_lag_events, recommended_lookback_s
+          | SORT miss_rate_pct DESC
+          | LIMIT 10000
+        params:
+          - space_id: "{{ consts.space_id }}"
+
+  - name: save_miss_rates
+    type: elasticsearch.request
+    with:
+      method: POST
+      path: /_bulk
+      headers:
+        Content-Type: application/x-ndjson
+      body: |
+        {"delete":{"_index":"lagprof-rules","_id":"__lagprof_noop__"}}
+        {% for row in steps.miss_rates.output.values %}{"create":{"_index":"lagprof-results","_id":"{{ row[0] }}:{{ row[2] }}:{{ row[6] }}-{{ row[7] }}"}}
+        {"@timestamp":{{ row[0] | json }},"lagprof":{"run":{"id":"{{ execution.id }}"},"window":{"start":{{ row[0] | json }}},"space":{"id":{{ row[1] | json }}},"rule":{"id":{{ row[2] | json }},"name":{{ row[3] | json }},"interval_s":{{ row[4] | json }},"lookback_s":{{ row[5] | json }}}},"data_stream":{"dataset":{{ row[6] | json }},"namespace":{{ row[7] | json }}},"events":{{ row[8] | json }},"est_missed":{{ row[9] | json }},"miss_rate_pct":{{ row[10] | json }},"lag_p50_s":{{ row[11] | json }},"lag_p95_s":{{ row[12] | json }},"lag_p99_s":{{ row[13] | json }},"lag_max_s":{{ row[14] | json }},"negative_lag_events":{{ row[15] | json }},"recommended_lookback_s":{{ row[16] | json }}}
+        {% endfor %}
+
+  # Shared stats: written by one copy only (consts.write_shared_stats).
+  - name: shared_stats
+    type: if
+    condition: "consts.write_shared_stats : true"
+    steps:
+      - name: stream_stats
+        type: elasticsearch.request
+        with:
+          method: POST
+          path: /_query
+          body:
+            # Measured events use the ingest-time window. Unmeasured events (no
+            # event.ingested) can only be placed by @timestamp, so they use that.
+            query: |
+              FROM logs-*
+              | WHERE @timestamp >= DATE_TRUNC(1 hour, NOW()) - 25 hours
+              | WHERE (event.ingested >= DATE_TRUNC(1 hour, NOW()) - 1 hour
+                       AND event.ingested < DATE_TRUNC(1 hour, NOW()))
+                   OR (event.ingested IS NULL
+                       AND @timestamp >= DATE_TRUNC(1 hour, NOW()) - 1 hour
+                       AND @timestamp < DATE_TRUNC(1 hour, NOW()))
+              | EVAL lag_s = DATE_DIFF("seconds", @timestamp, event.ingested)
+              | STATS events = COUNT(*),
+                      measured_events = COUNT(event.ingested),
+                      lag_p50_s = PERCENTILE(lag_s, 50),
+                      lag_p95_s = PERCENTILE(lag_s, 95),
+                      lag_p99_s = PERCENTILE(lag_s, 99),
+                      lag_max_s = MAX(lag_s),
+                      negative_lag_events = SUM(CASE(lag_s < -60, 1, 0))
+                   BY data_stream.dataset, data_stream.namespace
+              | EVAL window_start = DATE_TRUNC(1 hour, NOW()) - 1 hour,
+                     unmeasured_events = events - measured_events
+              | KEEP window_start, data_stream.dataset, data_stream.namespace,
+                     events, unmeasured_events,
+                     lag_p50_s, lag_p95_s, lag_p99_s, lag_max_s, negative_lag_events
+              | LIMIT 10000
+
+      - name: save_stream_stats
+        type: elasticsearch.request
+        with:
+          method: POST
+          path: /_bulk
+          headers:
+            Content-Type: application/x-ndjson
+          body: |
+            {"delete":{"_index":"lagprof-rules","_id":"__lagprof_noop__"}}
+            {% for row in steps.stream_stats.output.values %}{"create":{"_index":"lagprof-stream-stats","_id":"{{ row[0] }}:{{ row[1] }}-{{ row[2] }}"}}
+            {"@timestamp":{{ row[0] | json }},"lagprof":{"run":{"id":"{{ execution.id }}"},"window":{"start":{{ row[0] | json }}}},"data_stream":{"dataset":{{ row[1] | json }},"namespace":{{ row[2] | json }}},"events":{{ row[3] | json }},"unmeasured_events":{{ row[4] | json }},"lag_p50_s":{{ row[5] | json }},"lag_p95_s":{{ row[6] | json }},"lag_p99_s":{{ row[7] | json }},"lag_max_s":{{ row[8] | json }},"negative_lag_events":{{ row[9] | json }}}
+            {% endfor %}
+
+      - name: host_lag
+        type: elasticsearch.request
+        with:
+          method: POST
+          path: /_query
+          body:
+            query: |
+              FROM logs-*
+              | WHERE @timestamp >= DATE_TRUNC(1 hour, NOW()) - 25 hours
+                  AND event.ingested >= DATE_TRUNC(1 hour, NOW()) - 1 hour
+                  AND event.ingested <  DATE_TRUNC(1 hour, NOW())
+              | EVAL lag_s = DATE_DIFF("seconds", @timestamp, event.ingested)
+              | STATS events = COUNT(*),
+                      lag_p95_s = PERCENTILE(lag_s, 95),
+                      lag_max_s = MAX(lag_s),
+                      negative_lag_events = SUM(CASE(lag_s < -60, 1, 0))
+                   BY data_stream.dataset, data_stream.namespace, host.name
+              | WHERE lag_p95_s > 60 OR negative_lag_events > 0
+              | EVAL window_start = DATE_TRUNC(1 hour, NOW()) - 1 hour
+              | KEEP window_start, data_stream.dataset, data_stream.namespace, host.name,
+                     events, lag_p95_s, lag_max_s, negative_lag_events
+              | SORT lag_p95_s DESC
+              | LIMIT 10000
+
+      - name: save_host_lag
+        type: elasticsearch.request
+        with:
+          method: POST
+          path: /_bulk
+          headers:
+            Content-Type: application/x-ndjson
+          body: |
+            {"delete":{"_index":"lagprof-rules","_id":"__lagprof_noop__"}}
+            {% for row in steps.host_lag.output.values %}{"create":{"_index":"lagprof-host-lag","_id":"{{ row[0] }}:{{ row[1] }}-{{ row[2] }}:{{ row[3] }}"}}
+            {"@timestamp":{{ row[0] | json }},"lagprof":{"run":{"id":"{{ execution.id }}"},"window":{"start":{{ row[0] | json }}}},"data_stream":{"dataset":{{ row[1] | json }},"namespace":{{ row[2] | json }}},"host":{"name":{{ row[3] | json }}},"events":{{ row[4] | json }},"lag_p95_s":{{ row[5] | json }},"lag_max_s":{{ row[6] | json }},"negative_lag_events":{{ row[7] | json }}}
+            {% endfor %}
+
+  # ---------------------------------------------------------------------------
+  # Run summary
+  # ---------------------------------------------------------------------------
+  - name: count_rules
+    type: elasticsearch.request
+    with:
+      method: POST
+      path: /lagprof-rules/_search
+      body:
+        size: 0
+        track_total_hits: true
+        query: { term: { lagprof.run.id: "{{ execution.id }}" } }
+        aggs:
+          supported: { filter: { term: { lagprof.rule.supported: true } } }
+
+  - name: count_pairs
+    type: elasticsearch.request
+    with:
+      method: POST
+      path: /lagprof-rule-streams/_count
+      body:
+        query: { term: { lagprof.run.id: "{{ execution.id }}" } }
+
+  - name: record_success
+    type: elasticsearch.request
+    with:
+      method: POST
+      path: /lagprof-runs/_doc?pipeline=lagprof-stamp
+      body:
+        lagprof:
+          run: { id: "{{ execution.id }}" }
+          space: { id: "{{ consts.space_id }}" }
+          mode: per-space
+          wrote_shared_stats: "${{ consts.write_shared_stats }}"
+        rules_seen: "${{ steps.count_rules.output.hits.total.value }}"
+        rules_supported: "${{ steps.count_rules.output.aggregations.supported.doc_count }}"
+        streams_matched: "${{ steps.count_pairs.output.count }}"
+        result_rows: "${{ steps.miss_rates.output.values | size }}"
+        status: success

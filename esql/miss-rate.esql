@@ -1,0 +1,47 @@
+FROM logs-*
+| WHERE @timestamp >= DATE_TRUNC(1 hour, NOW()) - 25 hours
+    AND event.ingested >= DATE_TRUNC(1 hour, NOW()) - 1 hour
+    AND event.ingested <  DATE_TRUNC(1 hour, NOW())
+| EVAL lag_s = DATE_DIFF("seconds", @timestamp, event.ingested)
+// Per-stream lag figures, computed once on raw events. Named so they don't collide
+// with fields in the lookup index, which would replace them in the join.
+| INLINE STATS stream_p50 = PERCENTILE(lag_s, 50),
+               stream_p95 = PERCENTILE(lag_s, 95),
+               stream_p99 = PERCENTILE(lag_s, 99),
+               stream_max = MAX(lag_s)
+     BY data_stream.dataset, data_stream.namespace
+// Count events per stream and lag second, so rules join to counts, not raw events.
+// Lags over 2 hours are grouped by minute.
+| EVAL lag_s = CASE(lag_s > 7200, lag_s - lag_s % 60, lag_s)
+| STATS n = COUNT(*)
+     BY data_stream.dataset, data_stream.namespace, lag_s,
+        stream_p50, stream_p95, stream_p99, stream_max
+| LOOKUP JOIN lagprof-rule-streams ON data_stream.dataset, data_stream.namespace
+| WHERE lagprof.rule.id IS NOT NULL AND lagprof.rule.timestamp_field == "@timestamp"
+| EVAL margin_s = lagprof.rule.lookback_s - lagprof.rule.interval_s
+| EVAL miss = CASE(lag_s <= margin_s, 0.0,
+                   lag_s >= lagprof.rule.lookback_s, 1.0,
+                   TO_DOUBLE(lag_s - margin_s) / lagprof.rule.interval_s)
+| STATS events = SUM(n),
+        est_missed = SUM(n * miss),
+        negative_lag_events = SUM(CASE(lag_s < -60, n, 0)),
+        lag_p50_s = MAX(stream_p50),
+        lag_p95_s = MAX(stream_p95),
+        lag_p99_s = MAX(stream_p99),
+        lag_max_s = MAX(stream_max)
+     BY lagprof.space.id, lagprof.rule.id, lagprof.rule.name,
+        lagprof.rule.interval_s, lagprof.rule.lookback_s,
+        data_stream.dataset, data_stream.namespace
+| EVAL window_start = DATE_TRUNC(1 hour, NOW()) - 1 hour,
+       miss_rate_pct = ROUND(est_missed / events * 100, 2),
+       recommended_lookback_s = GREATEST(
+         lagprof.rule.interval_s + 60,
+         lagprof.rule.interval_s + TO_INTEGER(CEIL(lag_p99_s / 60.0)) * 60)
+| KEEP window_start, lagprof.space.id, lagprof.rule.id, lagprof.rule.name,
+       lagprof.rule.interval_s, lagprof.rule.lookback_s,
+       data_stream.dataset, data_stream.namespace,
+       events, est_missed, miss_rate_pct,
+       lag_p50_s, lag_p95_s, lag_p99_s, lag_max_s,
+       negative_lag_events, recommended_lookback_s
+| SORT miss_rate_pct DESC
+| LIMIT 10000

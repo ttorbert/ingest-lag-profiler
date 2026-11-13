@@ -1,0 +1,41 @@
+{
+  "_lagprof_notes": [
+    "The lookup index has its own small mapping, not lagprof-common. LOOKUP JOIN adds every field the lookup index maps, and a lookup field replaces any query column of the same name.",
+    "So map only what pair documents contain. `lagprof.py lint` fails if this mapping shares a name with a column the miss-rate query creates before its join.",
+    "The index is rebuilt by every workflow run, so the installer recreates it when its mapping is out of date."
+  ],
+  "index_patterns": ["lagprof-rule-streams"],
+  "priority": 500,
+  "template": {
+    "settings": { "index": { "mode": "lookup" } },
+    "mappings": {
+      "dynamic": false,
+      "properties": {
+        "data_stream": {
+          "properties": {
+            "name": { "type": "keyword" },
+            "type": { "type": "keyword" },
+            "dataset": { "type": "keyword" },
+            "namespace": { "type": "keyword" }
+          }
+        },
+        "lagprof": {
+          "properties": {
+            "run": { "properties": { "id": { "type": "keyword" } } },
+            "space": { "properties": { "id": { "type": "keyword" } } },
+            "parse_error": { "type": "keyword", "ignore_above": 1024 },
+            "rule": {
+              "properties": {
+                "id": { "type": "keyword" },
+                "name": { "type": "keyword", "ignore_above": 1024 },
+                "interval_s": { "type": "long" },
+                "lookback_s": { "type": "long" },
+                "timestamp_field": { "type": "keyword" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

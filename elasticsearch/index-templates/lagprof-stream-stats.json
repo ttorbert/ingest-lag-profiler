@@ -1,0 +1,9 @@
+{
+  "index_patterns": ["lagprof-stream-stats"],
+  "data_stream": {},
+  "composed_of": ["lagprof-common"],
+  "priority": 500,
+  "template": {
+    "lifecycle": { "data_retention": "90d" }
+  }
+}

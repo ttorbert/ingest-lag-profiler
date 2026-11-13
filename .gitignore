@@ -1,0 +1,15 @@
+# Lab secrets and generated certificates
+scripts/lab/.env
+scripts/lab/certs/
+
+# Real target files (examples and the lab file are committed)
+targets/*.env
+!targets/docker.env
+
+# Rendered workflows and packages
+build/
+dist/
+
+__pycache__/
+*.pyc
+.DS_Store

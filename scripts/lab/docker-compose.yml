@@ -1,0 +1,128 @@
+# Ingest Lag Profiler lab: Elasticsearch and Kibana 9.5.6 on Rancher Desktop
+# (dockerd/moby engine). Security and TLS are on, so the lab exercises the same
+# connection path as a self-managed cluster with a CA certificate.
+#
+#   make lab-up      start (runs scripts/lab/rancher-setup.sh first)
+#   make lab-down    stop, keep data
+#   make lab-reset   stop and delete all data (also gives a fresh 30-day trial)
+#
+# Settings come from scripts/lab/.env (copy .env.example).
+
+name: lagprof-lab
+
+services:
+  # One-time services. Others wait for them to *complete*, which also works when
+  # `up` is run again on a lab that's already running.
+  certs:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    user: "0"
+    volumes:
+      - ./certs:/usr/share/elasticsearch/config/certs
+    command: >
+      bash -c '
+        set -e
+        if [ ! -f config/certs/ca.zip ]; then
+          echo "Creating CA";
+          bin/elasticsearch-certutil ca --silent --pem -out config/certs/ca.zip;
+          unzip -o config/certs/ca.zip -d config/certs;
+        fi;
+        if [ ! -f config/certs/certs.zip ]; then
+          echo "Creating certificates";
+          printf "instances:\n  - name: es01\n    dns: [es01, localhost]\n    ip: [127.0.0.1]\n" > config/certs/instances.yml;
+          bin/elasticsearch-certutil cert --silent --pem -out config/certs/certs.zip --in config/certs/instances.yml --ca-cert config/certs/ca/ca.crt --ca-key config/certs/ca/ca.key;
+          unzip -o config/certs/certs.zip -d config/certs;
+        fi;
+        chown -R 1000:0 config/certs;
+        find config/certs -type d -exec chmod 755 {} \;;
+        find config/certs -type f -exec chmod 644 {} \;;
+        echo "Certificates ready";
+      '
+
+  setup:
+    depends_on:
+      es01:
+        condition: service_healthy
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    volumes:
+      - ./certs:/usr/share/elasticsearch/config/certs
+    command: >
+      bash -c '
+        set -e
+        echo "Setting kibana_system password";
+        until curl -s -X POST --cacert config/certs/ca/ca.crt -u "elastic:${ELASTIC_PASSWORD}" -H "Content-Type: application/json" https://es01:9200/_security/user/kibana_system/_password -d "{\"password\":\"${KIBANA_PASSWORD}\"}" | grep -q "^{}"; do sleep 5; done;
+        echo "Starting trial license";
+        curl -s -X POST --cacert config/certs/ca/ca.crt -u "elastic:${ELASTIC_PASSWORD}" "https://es01:9200/_license/start_trial?acknowledge=true" || true;
+        echo;
+        echo "Setup done";
+      '
+
+  es01:
+    depends_on:
+      certs:
+        condition: service_completed_successfully
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    volumes:
+      - ./certs:/usr/share/elasticsearch/config/certs
+      - esdata01:/usr/share/elasticsearch/data
+    ports:
+      - "127.0.0.1:${ES_PORT}:9200"
+    environment:
+      - node.name=es01
+      - cluster.name=lagprof-lab
+      - discovery.type=single-node
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - bootstrap.memory_lock=false
+      - ES_JAVA_OPTS=-Xms${ES_HEAP} -Xmx${ES_HEAP}
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=true
+      - xpack.security.http.ssl.key=certs/es01/es01.key
+      - xpack.security.http.ssl.certificate=certs/es01/es01.crt
+      - xpack.security.http.ssl.certificate_authorities=certs/ca/ca.crt
+      - xpack.security.transport.ssl.enabled=true
+      - xpack.security.transport.ssl.key=certs/es01/es01.key
+      - xpack.security.transport.ssl.certificate=certs/es01/es01.crt
+      - xpack.security.transport.ssl.certificate_authorities=certs/ca/ca.crt
+      - xpack.security.transport.ssl.verification_mode=certificate
+      - xpack.license.self_generated.type=trial
+    mem_limit: ${ES_MEM_LIMIT}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s --cacert config/certs/ca/ca.crt https://localhost:9200 | grep -q 'missing authentication credentials'"]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+
+  kibana:
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    image: docker.elastic.co/kibana/kibana:${STACK_VERSION}
+    volumes:
+      - ./certs:/usr/share/kibana/config/certs
+      - kibanadata:/usr/share/kibana/data
+    ports:
+      - "127.0.0.1:${KIBANA_PORT}:5601"
+    environment:
+      - SERVERNAME=kibana
+      - ELASTICSEARCH_HOSTS=https://es01:9200
+      - ELASTICSEARCH_USERNAME=kibana_system
+      - ELASTICSEARCH_PASSWORD=${KIBANA_PASSWORD}
+      - ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES=config/certs/ca/ca.crt
+      # Alerting and Workflows need stable encryption keys.
+      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY}
+      - XPACK_SECURITY_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY}
+      - XPACK_REPORTING_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY}
+      - NODE_OPTIONS=--max-old-space-size=${KIBANA_NODE_MEMORY_MB}
+      # Dashboard screenshots (reporting) need more time on a laptop.
+      - XPACK_SCREENSHOTTING_CAPTURE_TIMEOUTS_WAITFORELEMENTS=3m
+      - XPACK_SCREENSHOTTING_CAPTURE_TIMEOUTS_RENDERCOMPLETE=3m
+      - XPACK_REPORTING_QUEUE_TIMEOUT=10m
+    mem_limit: ${KIBANA_MEM_LIMIT}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -I http://localhost:5601/api/status | grep -q 'HTTP/1.1 200 OK'"]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+
+volumes:
+  esdata01:
+  kibanadata:

@@ -1,0 +1,26 @@
+{
+  "_lagprof_notes": [
+    "Created with POST /api/alerting/rule/lagprof-miss-rate. Keys starting with _lagprof are removed before sending.",
+    "To change the threshold, edit the final WHERE (1.0 = 1%).",
+    "VERIFY in Milestone 0: the .es-query ES|QL params shape on 9.5."
+  ],
+  "id": "lagprof-miss-rate",
+  "name": "Ingest Lag Profiler: rule miss rate above 1%",
+  "rule_type_id": ".es-query",
+  "consumer": "stackAlerts",
+  "schedule": { "interval": "15m" },
+  "tags": ["lagprof"],
+  "params": {
+    "searchType": "esqlQuery",
+    "esqlQuery": {
+      "esql": "FROM lagprof-results\n| WHERE lagprof.window.start == DATE_TRUNC(1 hour, NOW()) - 1 hour\n| STATS events = SUM(events), est_missed = SUM(est_missed),\n        recommended_lookback_s = MAX(recommended_lookback_s)\n     BY lagprof.space.id, lagprof.rule.id, lagprof.rule.name, lagprof.rule.lookback_s\n| EVAL miss_rate_pct = ROUND(est_missed / events * 100, 2)\n| WHERE miss_rate_pct > 1.0\n| SORT miss_rate_pct DESC\n| LIMIT 100"
+    },
+    "timeField": "@timestamp",
+    "timeWindowSize": 3,
+    "timeWindowUnit": "h",
+    "threshold": [0],
+    "thresholdComparator": ">",
+    "size": 100
+  },
+  "actions": []
+}

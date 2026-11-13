@@ -1,0 +1,103 @@
+{
+  "lagprof-rules-parse": [
+    {
+      "name": "custom query rule, 5m every 9m look-back",
+      "input": {"lagprof": {"rule": {"id": "r1", "type": "query", "interval_raw": "5m", "from_raw": "now-9m", "index_patterns": ["logs-system.*", "logs-windows.*"], "timestamp_override": ""}}},
+      "expect": {"lagprof.rule.interval_s": 300, "lagprof.rule.lookback_s": 540, "lagprof.rule.supported": true, "lagprof.rule.timestamp_field": "@timestamp", "lagprof.rule.index_patterns_csv": "logs-system.*,logs-windows.*"}
+    },
+    {
+      "name": "hourly rule with seconds and hours",
+      "input": {"lagprof": {"rule": {"id": "r2", "type": "eql", "interval_raw": "1h", "from_raw": "now-3900s", "index_patterns": ["logs-*"]}}},
+      "expect": {"lagprof.rule.interval_s": 3600, "lagprof.rule.lookback_s": 3900, "lagprof.rule.supported": true}
+    },
+    {
+      "name": "30 second interval",
+      "input": {"lagprof": {"rule": {"id": "r3", "type": "threshold", "interval_raw": "30s", "from_raw": "now-1m", "index_patterns": ["logs-*"]}}},
+      "expect": {"lagprof.rule.interval_s": 30, "lagprof.rule.lookback_s": 60, "lagprof.rule.supported": true}
+    },
+    {
+      "name": "timestamp override to event.ingested",
+      "input": {"lagprof": {"rule": {"id": "r4", "type": "query", "interval_raw": "5m", "from_raw": "now-9m", "index_patterns": ["logs-*"], "timestamp_override": "event.ingested", "timestamp_override_fallback_disabled": "false"}}},
+      "expect": {"lagprof.rule.timestamp_field": "event.ingested", "lagprof.rule.timestamp_override_fallback_disabled": false, "lagprof.rule.supported": true}
+    },
+    {
+      "name": "template null strings treated as missing",
+      "input": {"lagprof": {"rule": {"id": "r5", "type": "query", "interval_raw": "5m", "from_raw": "now-6m", "index_patterns": "[\"logs-a-*\",\"logs-b-*\"]", "timestamp_override": "null", "data_view_id": "null"}}},
+      "expect": {"lagprof.rule.timestamp_field": "@timestamp", "lagprof.rule.index_patterns_csv": "logs-a-*,logs-b-*", "lagprof.rule.supported": true, "lagprof.rule.data_view_id": null}
+    },
+    {
+      "name": "machine learning rule",
+      "input": {"lagprof": {"rule": {"id": "r6", "type": "machine_learning", "interval_raw": "15m", "from_raw": "now-45m"}}},
+      "expect": {"lagprof.rule.supported": false, "lagprof.rule.unsupported_reason": "machine learning rule"}
+    },
+    {
+      "name": "ES|QL rule",
+      "input": {"lagprof": {"rule": {"id": "r7", "type": "esql", "interval_raw": "5m", "from_raw": "now-6m"}}},
+      "expect": {"lagprof.rule.supported": false, "lagprof.rule.unsupported_reason": "ES|QL rule"}
+    },
+    {
+      "name": "data view rule",
+      "input": {"lagprof": {"rule": {"id": "r8", "type": "query", "interval_raw": "5m", "from_raw": "now-6m", "data_view_id": "security-solution-default"}}},
+      "expect": {"lagprof.rule.supported": false, "lagprof.rule.unsupported_reason": "uses a data view (not resolved in this version)"}
+    },
+    {
+      "name": "remote patterns dropped, local kept",
+      "input": {"lagprof": {"rule": {"id": "r9", "type": "query", "interval_raw": "5m", "from_raw": "now-6m", "index_patterns": ["remote:logs-*", "logs-endpoint.events.*"]}}},
+      "expect": {"lagprof.rule.supported": true, "lagprof.rule.remote_patterns_skipped": true, "lagprof.rule.index_patterns_csv": "logs-endpoint.events.*"}
+    },
+    {
+      "name": "only remote patterns",
+      "input": {"lagprof": {"rule": {"id": "r10", "type": "query", "interval_raw": "5m", "from_raw": "now-6m", "index_patterns": ["remote:logs-*"]}}},
+      "expect": {"lagprof.rule.supported": false, "lagprof.rule.unsupported_reason": "only remote cluster index patterns"}
+    },
+    {
+      "name": "junk schedule",
+      "input": {"lagprof": {"rule": {"id": "r11", "type": "query", "interval_raw": "five minutes", "from_raw": "yesterday", "index_patterns": ["logs-*"]}}},
+      "expect": {"lagprof.rule.supported": false, "lagprof.rule.unsupported_reason": "interval could not be parsed"}
+    },
+    {
+      "name": "unparseable from",
+      "input": {"lagprof": {"rule": {"id": "r12", "type": "query", "interval_raw": "5m", "from_raw": "2026-01-01", "index_patterns": ["logs-*"]}}},
+      "expect": {"lagprof.rule.supported": false, "lagprof.rule.unsupported_reason": "from could not be parsed"}
+    },
+    {
+      "name": "missing rule object fails into on_failure",
+      "input": {"lagprof": {}},
+      "expect": {"lagprof.rule.supported": false}
+    }
+  ],
+  "lagprof-streams-parse": [
+    {
+      "name": "system security",
+      "input": {"data_stream": {"name": "logs-system.security-default"}},
+      "expect": {"data_stream.type": "logs", "data_stream.dataset": "system.security", "data_stream.namespace": "default"}
+    },
+    {
+      "name": "endpoint process, custom namespace",
+      "input": {"data_stream": {"name": "logs-endpoint.events.process-prod"}},
+      "expect": {"data_stream.dataset": "endpoint.events.process", "data_stream.namespace": "prod"}
+    },
+    {
+      "name": "too many hyphens is kept but never joins",
+      "input": {"data_stream": {"name": "logs-foo-bar-baz"}},
+      "expect": {"data_stream.dataset": null, "data_stream.namespace": null, "lagprof.parse_error": "*"}
+    },
+    {
+      "name": "no hyphens",
+      "input": {"data_stream": {"name": "winlogbeat"}},
+      "expect": {"data_stream.dataset": null, "lagprof.parse_error": "*"}
+    }
+  ],
+  "lagprof-stamp": [
+    {
+      "name": "adds a timestamp",
+      "input": {"status": "success"},
+      "expect": {"@timestamp": "*"}
+    },
+    {
+      "name": "keeps an existing timestamp",
+      "input": {"@timestamp": "2026-11-13T10:00:00.000Z"},
+      "expect": {"@timestamp": "2026-11-13T10:00:00.000Z"}
+    }
+  ]
+}

@@ -1,0 +1,67 @@
+{
+  "template": {
+    "mappings": {
+      "dynamic": false,
+      "properties": {
+        "@timestamp": { "type": "date" },
+        "lagprof": {
+          "properties": {
+            "run": { "properties": { "id": { "type": "keyword" } } },
+            "space": { "properties": { "id": { "type": "keyword" } } },
+            "window": { "properties": { "start": { "type": "date" } } },
+            "mode": { "type": "keyword" },
+            "wrote_shared_stats": { "type": "boolean" },
+            "parse_error": { "type": "keyword", "ignore_above": 1024 },
+            "rule": {
+              "properties": {
+                "id": { "type": "keyword" },
+                "rule_id": { "type": "keyword" },
+                "name": { "type": "keyword", "ignore_above": 1024 },
+                "type": { "type": "keyword" },
+                "interval_raw": { "type": "keyword" },
+                "from_raw": { "type": "keyword" },
+                "interval_s": { "type": "long" },
+                "lookback_s": { "type": "long" },
+                "index_patterns": { "type": "keyword" },
+                "index_patterns_csv": { "type": "keyword", "ignore_above": 8191 },
+                "remote_patterns_skipped": { "type": "boolean" },
+                "data_view_id": { "type": "keyword" },
+                "timestamp_override": { "type": "keyword" },
+                "timestamp_override_fallback_disabled": { "type": "boolean" },
+                "timestamp_field": { "type": "keyword" },
+                "supported": { "type": "boolean" },
+                "unsupported_reason": { "type": "keyword" }
+              }
+            }
+          }
+        },
+        "data_stream": {
+          "properties": {
+            "name": { "type": "keyword" },
+            "type": { "type": "keyword" },
+            "dataset": { "type": "keyword" },
+            "namespace": { "type": "keyword" }
+          }
+        },
+        "host": { "properties": { "name": { "type": "keyword" } } },
+        "events": { "type": "long" },
+        "est_missed": { "type": "double" },
+        "miss_rate_pct": { "type": "double" },
+        "unmeasured_events": { "type": "long" },
+        "lag_p50_s": { "type": "double" },
+        "lag_p95_s": { "type": "double" },
+        "lag_p99_s": { "type": "double" },
+        "lag_max_s": { "type": "long" },
+        "negative_lag_events": { "type": "long" },
+        "recommended_lookback_s": { "type": "long" },
+        "spaces_with_rules": { "type": "long" },
+        "rules_seen": { "type": "long" },
+        "rules_supported": { "type": "long" },
+        "streams_matched": { "type": "long" },
+        "result_rows": { "type": "long" },
+        "status": { "type": "keyword" },
+        "error": { "type": "match_only_text" }
+      }
+    }
+  }
+}

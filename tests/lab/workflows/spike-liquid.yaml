@@ -1,0 +1,24 @@
+name: lagprof-spike-liquid
+description: Milestone 0 spike. Liquid json filter, defaults and nulls inside an NDJSON bulk body.
+enabled: true
+consts:
+  sample:
+    - name: 'Rule with "quotes" and \ backslash'
+      index: [logs-a-*, logs-b-*]
+      n: 5
+      nothing: null
+triggers:
+  - type: manual
+steps:
+  - name: bulk
+    type: elasticsearch.request
+    with:
+      method: POST
+      path: /_bulk?refresh=true
+      headers:
+        Content-Type: application/x-ndjson
+      body: |
+        {"delete":{"_index":"lagprof-spike-liquid","_id":"__noop__"}}
+        {% for r in consts.sample %}{"index":{"_index":"lagprof-spike-liquid","_id":"one"}}
+        {"name":{{ r.name | json }},"index":{{ r.index | json }},"n":{{ r.n | json }},"nothing":{{ r.nothing | json }},"missing":{{ r.not_there | default: "" | json }},"run":{{ execution.id | json }}}
+        {% endfor %}

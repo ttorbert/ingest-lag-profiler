@@ -1,0 +1,5 @@
+{
+  "index_patterns": ["lagprof-rules"],
+  "composed_of": ["lagprof-common"],
+  "priority": 500
+}

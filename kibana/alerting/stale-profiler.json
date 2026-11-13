@@ -1,0 +1,27 @@
+{
+  "_lagprof_notes": [
+    "Created with POST /api/alerting/rule/lagprof-stale-profiler. Keys starting with _lagprof are removed before sending.",
+    "Fires for each workflow (all-spaces, or each per-space copy) that ran in the last 7 days but has no successful run in the last 3 hours.",
+    "A copy that never ran at all isn't detected; the Profiler health panel shows that.",
+    "VERIFY in Milestone 0: the .es-query ES|QL params shape on 9.5."
+  ],
+  "id": "lagprof-stale-profiler",
+  "name": "Ingest Lag Profiler: no successful run in 3 hours",
+  "rule_type_id": ".es-query",
+  "consumer": "stackAlerts",
+  "schedule": { "interval": "30m" },
+  "tags": ["lagprof"],
+  "params": {
+    "searchType": "esqlQuery",
+    "esqlQuery": {
+      "esql": "FROM lagprof-runs\n| EVAL workflow = COALESCE(lagprof.space.id, \"all-spaces\"),\n       ok_recent = CASE(status == \"success\" AND @timestamp >= NOW() - 3 hours, 1, 0)\n| STATS ok = SUM(ok_recent), last_run = MAX(@timestamp) BY workflow\n| WHERE ok == 0\n| LIMIT 100"
+    },
+    "timeField": "@timestamp",
+    "timeWindowSize": 7,
+    "timeWindowUnit": "d",
+    "threshold": [0],
+    "thresholdComparator": ">",
+    "size": 100
+  },
+  "actions": []
+}

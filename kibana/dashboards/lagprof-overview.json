@@ -1,0 +1,356 @@
+{
+  "title": "Ingest Lag Profiler",
+  "description": "Estimated detection rule miss rates from ingest lag. Managed by lagprof (pack v0.1.0-dev).",
+  "time_range": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "markdown",
+      "grid": {
+        "x": 0,
+        "y": 0,
+        "w": 48,
+        "h": 4
+      },
+      "config": {
+        "content": "**Ingest Lag Profiler.** Estimated share of events each detection rule misses because logs arrive late. Results are **estimates**: `est_missed` counts events in the data streams a rule searches that fall outside its window, not missed alerts. Rules that search on `event.ingested` can't miss events because of lag; see *Rule coverage*. Updated hourly by the lagprof-hourly workflow."
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 0,
+        "y": 4,
+        "w": 48,
+        "h": 14
+      },
+      "config": {
+        "type": "data_table",
+        "title": "Rules at risk (latest hour)",
+        "data_source": {
+          "type": "esql",
+          "query": "FROM lagprof-results\n| INLINE STATS latest = MAX(lagprof.window.start)\n| EVAL in_latest = lagprof.window.start == latest\n| STATS events = SUM(CASE(in_latest, events, 0)),\n        missed = SUM(CASE(in_latest, est_missed, 0.0)),\n        recommended_s = MAX(recommended_lookback_s),\n        lookback_s = MAX(lagprof.rule.lookback_s),\n        interval_s = MAX(lagprof.rule.interval_s)\n     BY space = lagprof.space.id, rule = lagprof.rule.name\n| EVAL miss_rate_pct = ROUND(missed / events * 100, 2),\n       interval_min = interval_s / 60.0,\n       lookback_min = lookback_s / 60.0,\n       recommended_min = recommended_s / 60.0\n| WHERE miss_rate_pct > 0.1\n| KEEP rule, space, miss_rate_pct, interval_min, lookback_min, recommended_min\n| SORT miss_rate_pct DESC\n| LIMIT 200"
+        },
+        "rows": [
+          {
+            "column": "rule",
+            "label": "Rule"
+          },
+          {
+            "column": "space",
+            "label": "Space"
+          }
+        ],
+        "metrics": [
+          {
+            "column": "miss_rate_pct",
+            "label": "Est. miss rate (%)"
+          },
+          {
+            "column": "interval_min",
+            "label": "Runs every (min)"
+          },
+          {
+            "column": "lookback_min",
+            "label": "Looks back (min)"
+          },
+          {
+            "column": "recommended_min",
+            "label": "Recommended look-back (min)"
+          }
+        ],
+        "description": "Rules with an estimated miss rate above 0.1% in the newest hour. Recommended look-back keeps the estimate under 1%, from the highest hourly p99 lag in the time range."
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 0,
+        "y": 18,
+        "w": 24,
+        "h": 14
+      },
+      "config": {
+        "type": "xy",
+        "title": "Miss rate over time (%)",
+        "layers": [
+          {
+            "type": "line",
+            "data_source": {
+              "type": "esql",
+              "query": "FROM lagprof-results\n| STATS missed = SUM(est_missed), events = SUM(events)\n     BY hour = BUCKET(@timestamp, 1 hour), rule = lagprof.rule.name\n| EVAL miss_rate_pct = ROUND(missed / events * 100, 2)\n| KEEP hour, rule, miss_rate_pct"
+            },
+            "x": {
+              "column": "hour",
+              "label": "Hour"
+            },
+            "y": [
+              {
+                "column": "miss_rate_pct",
+                "label": "Est. miss rate (%)"
+              }
+            ],
+            "breakdown_by": {
+              "column": "rule",
+              "label": "Rule"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 24,
+        "y": 18,
+        "w": 24,
+        "h": 14
+      },
+      "config": {
+        "type": "xy",
+        "title": "95th percentile lag by data stream (seconds)",
+        "layers": [
+          {
+            "type": "line",
+            "data_source": {
+              "type": "esql",
+              "query": "FROM lagprof-stream-stats\n| WHERE lag_p95_s IS NOT NULL\n| STATS p95_lag_s = MAX(lag_p95_s)\n     BY hour = BUCKET(@timestamp, 1 hour), stream = data_stream.dataset"
+            },
+            "x": {
+              "column": "hour",
+              "label": "Hour"
+            },
+            "y": [
+              {
+                "column": "p95_lag_s",
+                "label": "p95 lag (s)"
+              }
+            ],
+            "breakdown_by": {
+              "column": "stream",
+              "label": "Data stream"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 12
+      },
+      "config": {
+        "type": "data_table",
+        "title": "Slowest hosts (latest hour)",
+        "data_source": {
+          "type": "esql",
+          "query": "FROM lagprof-host-lag\n| INLINE STATS latest = MAX(lagprof.window.start)\n| WHERE lagprof.window.start == latest AND lag_p95_s > 60\n| STATS p95_lag_s = MAX(lag_p95_s), max_lag_s = MAX(lag_max_s), events = SUM(events)\n     BY host = host.name, stream = data_stream.dataset\n| SORT p95_lag_s DESC\n| LIMIT 100"
+        },
+        "rows": [
+          {
+            "column": "host",
+            "label": "Host"
+          },
+          {
+            "column": "stream",
+            "label": "Data stream"
+          }
+        ],
+        "metrics": [
+          {
+            "column": "p95_lag_s",
+            "label": "p95 lag (s)"
+          },
+          {
+            "column": "max_lag_s",
+            "label": "Max lag (s)"
+          },
+          {
+            "column": "events",
+            "label": "Events"
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 24,
+        "y": 32,
+        "w": 24,
+        "h": 12
+      },
+      "config": {
+        "type": "data_table",
+        "title": "Clock problems: events stamped in the future",
+        "data_source": {
+          "type": "esql",
+          "query": "FROM lagprof-host-lag\n| WHERE negative_lag_events > 0\n| STATS events_in_future = SUM(negative_lag_events), last_seen = MAX(@timestamp)\n     BY host = host.name, stream = data_stream.dataset\n| SORT events_in_future DESC\n| LIMIT 100"
+        },
+        "rows": [
+          {
+            "column": "host",
+            "label": "Host"
+          },
+          {
+            "column": "stream",
+            "label": "Data stream"
+          }
+        ],
+        "metrics": [
+          {
+            "column": "events_in_future",
+            "label": "Events stamped in the future"
+          },
+          {
+            "column": "last_seen",
+            "label": "Last seen"
+          }
+        ],
+        "description": "Events stamped more than a minute after they arrived. Usually a source system's clock is wrong."
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 0,
+        "y": 44,
+        "w": 24,
+        "h": 12
+      },
+      "config": {
+        "type": "data_table",
+        "title": "Measurement gaps: events with no event.ingested",
+        "data_source": {
+          "type": "esql",
+          "query": "FROM lagprof-stream-stats\n| STATS events = SUM(events), unmeasured = SUM(unmeasured_events) BY stream = data_stream.dataset\n| EVAL unmeasured_pct = ROUND(unmeasured * 100.0 / events, 1)\n| WHERE unmeasured > 0\n| SORT unmeasured DESC\n| LIMIT 100"
+        },
+        "rows": [
+          {
+            "column": "stream",
+            "label": "Data stream"
+          }
+        ],
+        "metrics": [
+          {
+            "column": "events",
+            "label": "Events"
+          },
+          {
+            "column": "unmeasured",
+            "label": "No event.ingested"
+          },
+          {
+            "column": "unmeasured_pct",
+            "label": "No event.ingested (%)"
+          }
+        ],
+        "description": "Lag can't be measured for these events. Rules on event.ingested fall back to @timestamp for them."
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 24,
+        "y": 44,
+        "w": 12,
+        "h": 12
+      },
+      "config": {
+        "type": "data_table",
+        "title": "Rule coverage",
+        "data_source": {
+          "type": "esql",
+          "query": "FROM lagprof-rules\n| EVAL coverage = CASE(lagprof.rule.supported == false, \"Unsupported\",\n                       lagprof.rule.timestamp_field == \"event.ingested\", \"Unaffected (event.ingested)\",\n                       \"Measured (@timestamp)\")\n| STATS rules = COUNT(*) BY coverage\n| SORT rules DESC"
+        },
+        "rows": [
+          {
+            "column": "coverage",
+            "label": "Coverage"
+          }
+        ],
+        "metrics": [
+          {
+            "column": "rules",
+            "label": "Rules"
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 36,
+        "y": 44,
+        "w": 12,
+        "h": 12
+      },
+      "config": {
+        "type": "data_table",
+        "title": "Unsupported rules",
+        "data_source": {
+          "type": "esql",
+          "query": "FROM lagprof-rules\n| WHERE lagprof.rule.supported == false\n| STATS rules = COUNT(*) BY reason = lagprof.rule.unsupported_reason\n| SORT rules DESC"
+        },
+        "rows": [
+          {
+            "column": "reason",
+            "label": "Reason"
+          }
+        ],
+        "metrics": [
+          {
+            "column": "rules",
+            "label": "Rules"
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 0,
+        "y": 56,
+        "w": 48,
+        "h": 8
+      },
+      "config": {
+        "type": "data_table",
+        "title": "Profiler health",
+        "data_source": {
+          "type": "esql",
+          "query": "FROM lagprof-runs\n| EVAL workflow = COALESCE(lagprof.space.id, \"all spaces\"),\n       ok = CASE(status == \"success\", 1, 0)\n| STATS last_run = MAX(@timestamp), runs = COUNT(*), succeeded = SUM(ok),\n        last_rules_seen = MAX(rules_seen)\n     BY workflow\n| EVAL failed = runs - succeeded\n| KEEP workflow, last_run, runs, failed, last_rules_seen"
+        },
+        "rows": [
+          {
+            "column": "workflow",
+            "label": "Workflow"
+          }
+        ],
+        "metrics": [
+          {
+            "column": "last_run",
+            "label": "Last run"
+          },
+          {
+            "column": "runs",
+            "label": "Runs"
+          },
+          {
+            "column": "failed",
+            "label": "Failed"
+          },
+          {
+            "column": "last_rules_seen",
+            "label": "Rules seen"
+          }
+        ]
+      }
+    }
+  ]
+}
