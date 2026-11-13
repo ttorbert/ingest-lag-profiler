@@ -37,19 +37,84 @@ A target file tells the installer where your deployment is and how to sign in. C
 | Elastic Cloud (hosted) | `cp targets/cloud.env.example targets/prod.env` |
 | Serverless | `cp targets/serverless.env.example targets/prod.env` |
 
-Then edit `targets/prod.env`:
+Then edit `targets/prod.env`. Each line is `NAME=value`, and lines starting with `#` are comments:
 
 ```bash
-LAGPROF_TARGET=self-managed            # self-managed | cloud | serverless
+# Deployment type: self-managed | cloud | serverless
+LAGPROF_TARGET=self-managed
+
+# Where Elasticsearch and Kibana are. These work for every deployment type.
 ES_URL=https://elasticsearch.example.internal:9200
 KIBANA_URL=https://kibana.example.internal:5601
-ES_API_KEY=<admin API key>             # or ES_USERNAME / ES_PASSWORD (self-managed only)
-CA_CERT=/path/to/ca.crt                # only for a private certificate authority
+
+# Elastic Cloud only, optional: a Cloud ID instead of the two URLs above.
+# CLOUD_ID=my-deployment:dXMtZWFzdC0xLmF3cy5mb3VuZC5pbyRhYmMxMjMkZGVmNDU2
+
+# Sign-in: either an API key...
+ES_API_KEY=<encoded admin API key>
+# ...or a username and password (self-managed only).
+# ES_USERNAME=elastic
+# ES_PASSWORD=<password>
+
+# Only if your cluster uses a private certificate authority:
+# CA_CERT=/path/to/ca.crt
+# VERIFY_TLS=true
+
+# Added in step 7:
+# LAGPROF_WORKFLOW_API_KEY=<encoded API key of the workflow's own user>
 ```
 
-- **Elastic Cloud:** set `CLOUD_ID` instead of the two URLs. It's on the deployment's overview page.
-- **Serverless:** both URLs are on the project's *Connection details* page. Serverless needs an API key.
-- **The admin API key** is only used while installing. The simplest choice is a key for a user with the `superuser` role. A narrower set of privileges is listed under [Installer privileges](#installer-privileges).
+**Settings:**
+
+| Setting | Needed | Value |
+| --- | --- | --- |
+| `LAGPROF_TARGET` | Always | `self-managed`, `cloud` or `serverless` |
+| `ES_URL` | Yes, unless `CLOUD_ID` is set | Elasticsearch address, including the port, for example `https://…:9200`. On Elastic Cloud, copy it from the deployment page (*Copy endpoint*). On Serverless, from *Connection details*. |
+| `KIBANA_URL` | Yes, unless `CLOUD_ID` is set | Kibana address, found in the same places |
+| `CLOUD_ID` | Never; optional on Elastic Cloud | A shortcut that encodes both addresses: the deployment name, a colon, then an encoded string. Copy it from the deployment's overview page. If you also set `ES_URL` and `KIBANA_URL`, the URLs win. Using the URLs everywhere is simplest. |
+| `ES_API_KEY` | For Cloud and Serverless; or use a username and password on self-managed | The **Encoded** value shown when you create an API key |
+| `ES_USERNAME`, `ES_PASSWORD` | Self-managed only, instead of `ES_API_KEY` | A user's login. The same login is used for Kibana. |
+| `CA_CERT` | Only with a private certificate authority | Path to the CA certificate file |
+| `VERIFY_TLS` | No | `true` (default). Set `false` only for a throwaway test cluster. |
+| `LAGPROF_WORKFLOW_API_KEY` | Recommended; see step 7 | API key of the workflow's own low-privilege user |
+
+**The admin login** (`ES_API_KEY`, or `ES_USERNAME` and `ES_PASSWORD`) is only used while installing. The simplest choice is a user with the `superuser` role. A narrower set of privileges is listed under [Installer privileges](#installer-privileges).
+
+**Quoting:** you don't need quotes. If a value contains `$`, a space or `#`, wrap it in single quotes, for example `ES_PASSWORD='p@ss$word #1'`. Without quotes, `${...}` is read as a variable (see below), and anything after ` #` is read as a comment.
+
+### Keeping secrets out of the file (optional)
+
+Instead of writing a password or API key in the target file, you can keep it in an environment variable. There are two ways.
+
+**Option A: refer to the variable from the file.** Write `${VARIABLE_NAME}` as the value:
+
+```bash
+# targets/prod.env
+ES_API_KEY=${LAGPROF_ADMIN_KEY}
+LAGPROF_WORKFLOW_API_KEY=${LAGPROF_OWNER_KEY}
+```
+
+Then set the variables in the terminal before running the installer:
+
+```bash
+export LAGPROF_ADMIN_KEY='<encoded admin API key>'
+export LAGPROF_OWNER_KEY='<encoded workflow API key>'
+python3 scripts/lagprof.py check --target-file targets/prod.env
+```
+
+**Option B: set the setting itself as a variable.** Any setting in the table above can be set directly as an environment variable, and it **overrides** the target file:
+
+```bash
+export ES_API_KEY='<encoded admin API key>'
+python3 scripts/lagprof.py install --target-file targets/prod.env
+```
+
+**Things to know:**
+- **Variables last only for the current terminal session.** `export` sets them until you close the terminal.
+  - To set one for a single command only, put it in front: `ES_PASSWORD='…' python3 scripts/lagprof.py check --target-file targets/prod.env`
+  - To keep them across sessions, add the `export` lines to your shell profile (`~/.zshrc` on macOS, `~/.bashrc` on most Linux), or load them from a password manager's command-line tool.
+- **Your shell history records what you type.** In zsh and bash, starting a command with a space usually keeps it out of the history (zsh needs `setopt HIST_IGNORE_SPACE`). Or read the value without echoing it: `read -rs LAGPROF_ADMIN_KEY && export LAGPROF_ADMIN_KEY`.
+- **To check a variable is set without printing it:** `[ -n "$LAGPROF_ADMIN_KEY" ] && echo set || echo missing`.
 
 ## 4. Check the deployment
 
