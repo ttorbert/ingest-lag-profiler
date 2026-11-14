@@ -26,15 +26,23 @@ INDICES = ("lagprof-rules", "lagprof-rule-streams", "lagprof-results", "lagprof-
 
 
 def upsert(c: lagprof.Client, prefix: str, yaml_text: str) -> str:
-    wid = re.search(r"(?m)^name:\s*(\S+)", yaml_text).group(1)
-    code, _ = c.kb("GET", f"{prefix}/api/workflows/workflow/{wid}", allow=(404,))
-    if code == 404:
+    """Import or update the workflow and return its ID.
+
+    Matched by name, like the installer: Kibana doesn't reuse a deleted workflow's ID,
+    so a re-created workflow's ID is "<name>-1" and so on, not its name."""
+    name = re.search(r"(?m)^name:\s*(\S+)", yaml_text).group(1)
+    _, listing = c.kb("GET", f"{prefix}/api/workflows?size=1000")
+    matches = [w for w in (listing or {}).get("results", []) if w.get("name") == name]
+    if not matches:
         _, out = c.kb("POST", f"{prefix}/api/workflows", {"workflows": [{"yaml": yaml_text}]})
         w = out["created"][0]
         print(f"imported {w['id']} (valid={w.get('valid')})")
-    else:
-        _, w = c.kb("PUT", f"{prefix}/api/workflows/workflow/{wid}", {"yaml": yaml_text})
-        print(f"updated {wid} (valid={w.get('valid')})")
+        return w["id"]
+    if len(matches) > 1:
+        print(f"WARN {len(matches)} workflows named {name}: {', '.join(w['id'] for w in matches)}; using the first")
+    wid = matches[0]["id"]
+    _, w = c.kb("PUT", f"{prefix}/api/workflows/workflow/{wid}", {"yaml": yaml_text})
+    print(f"updated {wid} (valid={w.get('valid')})")
     return wid
 
 
