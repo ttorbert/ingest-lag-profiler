@@ -36,7 +36,8 @@
         "rows": [
           {
             "column": "rule",
-            "label": "Rule"
+            "label": "Rule",
+            "width": 320
           },
           {
             "column": "space",

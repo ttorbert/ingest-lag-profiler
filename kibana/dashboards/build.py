@@ -122,13 +122,18 @@ LABELS = {
 }
 
 
-def col(name: str) -> dict:
-    return {"column": name, "label": LABELS.get(name, name)}
+def col(name: str, width: int | None = None) -> dict:
+    c = {"column": name, "label": LABELS.get(name, name)}
+    if width:
+        c["width"] = width  # pixels; keeps long values such as rule names from being cut off
+    return c
 
 
-def table(title: str, query: str, rows: list[str], metrics: list[str], grid: dict, description: str = "") -> dict:
+def table(title: str, query: str, rows: list[str], metrics: list[str], grid: dict, description: str = "",
+          widths: dict[str, int] | None = None) -> dict:
+    widths = widths or {}
     cfg = {"type": "data_table", "title": title, "data_source": esql(query),
-           "rows": [col(c) for c in rows], "metrics": [col(c) for c in metrics]}
+           "rows": [col(c, widths.get(c)) for c in rows], "metrics": [col(c, widths.get(c)) for c in metrics]}
     if description:
         cfg["description"] = description
     return {"type": "vis", "grid": grid, "config": cfg}
@@ -157,7 +162,8 @@ def build(version: str) -> dict:
               "Rules with an estimated miss rate above 0.1% in the newest hour, most missed events first. "
               "Total look-back is the rule's interval plus its additional look-back. The recommendation keeps the "
               "estimate under 1%, from the highest hourly p99 lag in the time range. To apply it, set the rule's "
-              "Additional look-back time in Kibana to the last column."),
+              "Additional look-back time in Kibana to the last column.",
+              widths={"rule": 320}),
         line("Miss rate over time (%)", Q["miss_rate_over_time"], "hour", "miss_rate_pct", "rule", g(0, 18, 24, 14)),
         line("95th percentile lag by data stream (seconds)", Q["lag_by_stream"], "hour", "p95_lag_s", "stream",
              g(24, 18, 24, 14)),
