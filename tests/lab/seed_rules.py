@@ -4,8 +4,11 @@
 Spaces: default, soc, empty (no rules). Rules (all enabled, all tagged lagprof-lab):
 
   default  lab: timestamp rule         query, every 5m, look back 9m, @timestamp
-  default  lab: ingested rule          same, timestamp_override event.ingested
-  default  lab: "quoted" \\ rule       remote and missing patterns mixed with a real one
+  default  lab: "ingested" \\ rule     same, timestamp_override event.ingested; quotes and a
+                                       backslash in the name test escaping (never at risk, so
+                                       it stays out of the Rules at risk panel)
+  default  lab: auth rule (mixed index patterns)
+                                       remote and missing patterns mixed with a real one
   soc      lab: one-minute rule        query, every 1m, look back 6m
   soc      lab: esql rule              ES|QL (unsupported)
 
@@ -31,10 +34,10 @@ RULES = [
     ("default", {"rule_id": "lagprof-lab-timestamp", "name": "lab: timestamp rule", "type": "query",
                  "language": "kuery", "query": "event.category:*", "index": ["logs-lagtest.*"],
                  "interval": "5m", "from": "now-9m"}),
-    ("default", {"rule_id": "lagprof-lab-ingested", "name": "lab: ingested rule", "type": "query",
+    ("default", {"rule_id": "lagprof-lab-ingested", "name": 'lab: "ingested" \\ rule', "type": "query",
                  "language": "kuery", "query": "event.category:*", "index": ["logs-lagtest.*"],
                  "interval": "5m", "from": "now-9m", "timestamp_override": "event.ingested"}),
-    ("default", {"rule_id": "lagprof-lab-quoted", "name": 'lab: "quoted" \\ rule', "type": "query",
+    ("default", {"rule_id": "lagprof-lab-quoted", "name": "lab: auth rule (mixed index patterns)", "type": "query",
                  "language": "kuery", "query": "event.category:authentication",
                  "index": ["logs-lagtest.auth-*", "remote:logs-*", "missing-index-name"],
                  "interval": "5m", "from": "now-6m"}),

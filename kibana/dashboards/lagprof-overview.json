@@ -31,7 +31,7 @@
         "title": "Rules at risk (latest hour)",
         "data_source": {
           "type": "esql",
-          "query": "FROM lagprof-results\n| INLINE STATS latest = MAX(lagprof.window.start)\n| EVAL in_latest = lagprof.window.start == latest\n| STATS events = SUM(CASE(in_latest, events, 0)),\n        missed = SUM(CASE(in_latest, est_missed, 0.0)),\n        recommended_s = MAX(recommended_lookback_s),\n        lookback_s = MAX(lagprof.rule.lookback_s),\n        interval_s = MAX(lagprof.rule.interval_s)\n     BY space = lagprof.space.id, rule = lagprof.rule.name\n| EVAL miss_rate_pct = ROUND(missed / events * 100, 2),\n       interval_min = interval_s / 60.0,\n       lookback_min = lookback_s / 60.0,\n       recommended_min = recommended_s / 60.0\n| WHERE miss_rate_pct > 0.1\n| KEEP rule, space, miss_rate_pct, interval_min, lookback_min, recommended_min\n| SORT miss_rate_pct DESC\n| LIMIT 200"
+          "query": "FROM lagprof-results\n| INLINE STATS latest = MAX(lagprof.window.start)\n| EVAL in_latest = lagprof.window.start == latest\n| STATS events = SUM(CASE(in_latest, events, 0)),\n        missed = SUM(CASE(in_latest, est_missed, 0.0)),\n        recommended_s = MAX(recommended_lookback_s),\n        lookback_s = MAX(lagprof.rule.lookback_s),\n        interval_s = MAX(lagprof.rule.interval_s)\n     BY space = lagprof.space.id, rule = lagprof.rule.name\n| EVAL miss_rate_pct = ROUND(missed / events * 100, 2),\n       est_missed = TO_LONG(ROUND(missed)),\n       interval_min = interval_s / 60.0,\n       lookback_min = lookback_s / 60.0,\n       recommended_min = recommended_s / 60.0,\n       recommended_additional_min = (recommended_s - interval_s) / 60.0\n| WHERE miss_rate_pct > 0.1\n| KEEP rule, space, est_missed, events, miss_rate_pct, interval_min, lookback_min, recommended_min,\n       recommended_additional_min\n| SORT est_missed DESC, miss_rate_pct DESC\n| LIMIT 200"
         },
         "rows": [
           {
@@ -45,6 +45,14 @@
         ],
         "metrics": [
           {
+            "column": "est_missed",
+            "label": "Est. missed events"
+          },
+          {
+            "column": "events",
+            "label": "Events"
+          },
+          {
             "column": "miss_rate_pct",
             "label": "Est. miss rate (%)"
           },
@@ -54,14 +62,18 @@
           },
           {
             "column": "lookback_min",
-            "label": "Looks back (min)"
+            "label": "Total look-back (min)"
           },
           {
             "column": "recommended_min",
-            "label": "Recommended look-back (min)"
+            "label": "Recommended total look-back (min)"
+          },
+          {
+            "column": "recommended_additional_min",
+            "label": "Set additional look-back to (min)"
           }
         ],
-        "description": "Rules with an estimated miss rate above 0.1% in the newest hour. Recommended look-back keeps the estimate under 1%, from the highest hourly p99 lag in the time range."
+        "description": "Rules with an estimated miss rate above 0.1% in the newest hour, most missed events first. Total look-back is the rule's interval plus its additional look-back. The recommendation keeps the estimate under 1%, from the highest hourly p99 lag in the time range. To apply it, set the rule's Additional look-back time in Kibana to the last column."
       }
     },
     {

@@ -43,16 +43,21 @@ Open **Dashboards › Ingest Lag Profiler**. It shows the last 7 days by default
 
 ### Rules at risk (latest hour)
 
-The panel to act on: rules with an estimated miss rate above 0.1% in the newest hour, worst first.
+The panel to act on: rules with an estimated miss rate above 0.1% in the newest hour, sorted by estimated missed events, most first.
 
 | Column | Meaning |
 | --- | --- |
-| Est. miss rate (%) | Share of the rule's events that arrived too late, across all its data streams |
+| Est. missed events | Expected number of the rule's events in the hour that arrived too late to be checked (`est_missed`, rounded) |
+| Events | Events in the hour in the data streams the rule searches |
+| Est. miss rate (%) | Est. missed events ÷ Events, across all the rule's data streams |
 | Runs every (min) | The rule's interval |
-| Looks back (min) | The rule's total look-back (interval plus additional look-back) |
-| Recommended look-back (min) | Total look-back that keeps the estimate under 1%, based on the worst hourly 99th-percentile lag in the time range |
+| Total look-back (min) | The rule's whole search window: interval plus additional look-back (the rule's `from`, e.g. `now-6m`) |
+| Recommended total look-back (min) | Total look-back that keeps the estimate under 1%, based on the worst hourly 99th-percentile lag in the time range |
+| Set additional look-back to (min) | Recommended total look-back − interval: the value to enter in Kibana |
 
-**To apply a recommendation:** in Kibana, set the rule's **Additional look-back time** to *recommended − interval*. For example, if a rule runs every 5 minutes and the recommendation is 16, set the additional look-back to 11 minutes. See [Acting on findings](#acting-on-findings) for other options.
+**Missed events or miss rate?** Use both. Missed events shows where the most data goes unchecked: a 2.5% rate on a busy rule can mean as many missed events as 11% on a quiet one. The rate matters for rules that look for rare, high-severity events, where even a few misses count.
+
+**To apply a recommendation:** in Kibana, edit the rule and set **Additional look-back time** to the value in the last column. Kibana asks for the *additional* time, not the total. For example, if a rule runs every 5 minutes and the recommended total is 16, set the additional look-back to 11 minutes. See [Acting on findings](#acting-on-findings) for other options.
 
 ### Miss rate over time (%)
 

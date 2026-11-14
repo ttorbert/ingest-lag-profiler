@@ -38,12 +38,15 @@ Q = {
         interval_s = MAX(lagprof.rule.interval_s)
      BY space = lagprof.space.id, rule = lagprof.rule.name
 | EVAL miss_rate_pct = ROUND(missed / events * 100, 2),
+       est_missed = TO_LONG(ROUND(missed)),
        interval_min = interval_s / 60.0,
        lookback_min = lookback_s / 60.0,
-       recommended_min = recommended_s / 60.0
+       recommended_min = recommended_s / 60.0,
+       recommended_additional_min = (recommended_s - interval_s) / 60.0
 | WHERE miss_rate_pct > 0.1
-| KEEP rule, space, miss_rate_pct, interval_min, lookback_min, recommended_min
-| SORT miss_rate_pct DESC
+| KEEP rule, space, est_missed, events, miss_rate_pct, interval_min, lookback_min, recommended_min,
+       recommended_additional_min
+| SORT est_missed DESC, miss_rate_pct DESC
 | LIMIT 200""",
 
     "miss_rate_over_time": """FROM lagprof-results
@@ -108,7 +111,9 @@ def esql(query: str) -> dict:
 
 LABELS = {
     "rule": "Rule", "space": "Space", "miss_rate_pct": "Est. miss rate (%)", "interval_min": "Runs every (min)",
-    "lookback_min": "Looks back (min)", "recommended_min": "Recommended look-back (min)", "host": "Host",
+    "lookback_min": "Total look-back (min)", "recommended_min": "Recommended total look-back (min)",
+    "recommended_additional_min": "Set additional look-back to (min)", "est_missed": "Est. missed events",
+    "host": "Host",
     "stream": "Data stream", "p95_lag_s": "p95 lag (s)", "max_lag_s": "Max lag (s)", "events": "Events",
     "events_in_future": "Events stamped in the future", "last_seen": "Last seen", "unmeasured": "No event.ingested",
     "unmeasured_pct": "No event.ingested (%)", "coverage": "Coverage", "rules": "Rules", "reason": "Reason",
@@ -146,9 +151,13 @@ def build(version: str) -> dict:
     panels = [
         {"type": "markdown", "grid": g(0, 0, 48, 4), "config": {"content": INTRO}},
         table("Rules at risk (latest hour)", Q["rules_at_risk"],
-              ["rule", "space"], ["miss_rate_pct", "interval_min", "lookback_min", "recommended_min"], g(0, 4, 48, 14),
-              "Rules with an estimated miss rate above 0.1% in the newest hour. Recommended look-back keeps the "
-              "estimate under 1%, from the highest hourly p99 lag in the time range."),
+              ["rule", "space"],
+              ["est_missed", "events", "miss_rate_pct", "interval_min", "lookback_min", "recommended_min",
+               "recommended_additional_min"], g(0, 4, 48, 14),
+              "Rules with an estimated miss rate above 0.1% in the newest hour, most missed events first. "
+              "Total look-back is the rule's interval plus its additional look-back. The recommendation keeps the "
+              "estimate under 1%, from the highest hourly p99 lag in the time range. To apply it, set the rule's "
+              "Additional look-back time in Kibana to the last column."),
         line("Miss rate over time (%)", Q["miss_rate_over_time"], "hour", "miss_rate_pct", "rule", g(0, 18, 24, 14)),
         line("95th percentile lag by data stream (seconds)", Q["lag_by_stream"], "hour", "p95_lag_s", "stream",
              g(24, 18, 24, 14)),
