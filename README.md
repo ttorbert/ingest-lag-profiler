@@ -67,7 +67,7 @@ A workflow's **scheduled runs use the permissions of the account that last saved
 
 To keep them limited:
 
-1. Create a dedicated user, for example `lagprof-runner`, with only the `lagprof-workflow` role. The installer creates the role.
+1. Create a dedicated user, for example `lagprof-runner`, with only the `lagprof-workflow` role. The installer creates the role. In per-space mode each copy has its own role, `lagprof-workflow-<space>`, so use one user per space.
 2. Sign in as that user and create an API key: `POST /_security/api_key` with `{"name": "lagprof-workflow-owner"}`.
 3. Add `LAGPROF_WORKFLOW_API_KEY=<encoded key>` to your target file and run `install` again. The workflow is then saved by `lagprof-runner`.
 

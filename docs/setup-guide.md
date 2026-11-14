@@ -163,6 +163,8 @@ python3 scripts/lagprof.py install --target-file targets/prod.env --workflow per
 python3 scripts/lagprof.py install --target-file targets/prod.env --workflow per-space --space team-b
 ```
 
+Each per-space copy gets its own role (`lagprof-workflow-<space>`), its own dashboard (*Ingest Lag Profiler (soc)*), and its own two alert rules, which cover only that space's rules and workflow. Install one version, not both: the installer refuses a per-space copy while the all-spaces workflow is installed, and the other way round. To switch, uninstall the current version first (history is kept).
+
 The installer runs `check` first, then installs these in order:
 
 | Resource | What it is |
@@ -171,7 +173,7 @@ The installer runs `check` first, then installs these in order:
 | Ingest pipelines (3) | Parse rule schedules and data stream names |
 | `lagprof-rules`, `lagprof-rule-streams` | Rule inventory, and the lookup index the main query joins |
 | Data streams (4): `lagprof-results`, `lagprof-stream-stats`, `lagprof-host-lag`, `lagprof-runs` | Created empty, so the dashboard shows empty panels rather than errors before the first run |
-| Role `lagprof-workflow` | The permissions the workflow runs with |
+| Role `lagprof-workflow` (per space: `lagprof-workflow-<space>`) | The permissions the workflow runs with |
 | Workflow `lagprof-hourly-…` | Runs every hour; **its first run starts immediately**. With no logs yet, that run records `no_data` instead of failing |
 | Dashboard *Ingest Lag Profiler* | Ten panels; see the [user guide](user-guide.md) |
 | Alert rules (2) | Miss rate above 1%; no completed run in 3 hours |
@@ -190,7 +192,7 @@ Step 7 fixes it.
 
 **This step matters for security.** A workflow's scheduled runs use the permissions of **whoever last saved it**. After step 6 that's your administrator account, so the hourly runs have full administrator rights.
 
-To limit them to the `lagprof-workflow` role:
+To limit them to the `lagprof-workflow` role. In per-space mode, do this for each space, with a user that has only that space's role, `lagprof-workflow-<space>`:
 
 1. **Create a dedicated user.** Name it, for example, `lagprof-runner`, and give it only the `lagprof-workflow` role, which the installer created. Do this in **Stack Management › Users**, or with the API:
 

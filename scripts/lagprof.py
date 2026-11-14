@@ -19,7 +19,8 @@ Environment variables win over the file. Values may use ${VAR}.
     ES_API_KEY           or   ES_USERNAME + ES_PASSWORD
     CA_CERT              path to a CA certificate (optional)
     VERIFY_TLS           true (default) | false
-    LAGPROF_WORKFLOW_API_KEY   API key of a dedicated user with the lagprof-workflow role.
+    LAGPROF_WORKFLOW_API_KEY   API key of a dedicated user with the lagprof-workflow role
+                         (per-space mode: lagprof-workflow-<space>).
                          The workflow is saved with it, so scheduled runs use that
                          user's (limited) privileges. Without it they use the installer's.
 """
@@ -467,7 +468,17 @@ class Resource:
     path: str | None = None
 
 
-def pack_resources() -> list[Resource]:
+def scoped(name: str, space: str | None) -> str:
+    """Per-space installs get their own role, dashboard and alert rules.
+
+    Kibana dashboard and alert rule IDs are unique across all spaces, and one shared
+    role would be rewritten to the last space installed, so per-space copies must not
+    share them."""
+    return f"{name}-{space}" if space else name
+
+
+def pack_resources(space: str | None = None) -> list[Resource]:
+    """The pack's resources. space is set for a per-space install (see scoped())."""
     res: list[Resource] = []
     for kind, folder in (("component_template", "elasticsearch/component-templates"),
                          ("index_template", "elasticsearch/index-templates"),
@@ -483,11 +494,11 @@ def pack_resources() -> list[Resource]:
         body = load_json(p.relative_to(PACK_ROOT))
         if "data_stream" in body:
             res.append(Resource("data_stream", body["index_patterns"][0]))
-    res.append(Resource("role", ROLE_NAME, "elasticsearch/security/lagprof-workflow-role.json"))
+    res.append(Resource("role", scoped(ROLE_NAME, space), "elasticsearch/security/lagprof-workflow-role.json"))
     res.append(Resource("workflow", "lagprof-hourly"))
-    res.append(Resource("dashboard", "lagprof-overview", "kibana/dashboards/lagprof-overview.json"))
+    res.append(Resource("dashboard", scoped("lagprof-overview", space), "kibana/dashboards/lagprof-overview.json"))
     for p in sorted((PACK_ROOT / "kibana/alerting").glob("*.json")):
-        res.append(Resource("alert_rule", load_json(p.relative_to(PACK_ROOT))["id"],
+        res.append(Resource("alert_rule", scoped(load_json(p.relative_to(PACK_ROOT))["id"], space),
                             str(p.relative_to(PACK_ROOT))))
     return res
 
@@ -537,10 +548,23 @@ def installed_version(client: Client, r: Resource, space: str | None) -> str | N
     return None
 
 
-def render_dashboard(path: str, marker: str) -> dict:
+def render_dashboard(path: str, marker: str, space: str | None = None) -> dict:
     body = load_json(path)
     ver, _, h = marker.partition("+")
     body["description"] = re.sub(r"pack v[^)]*\)", f"pack v{ver}, {h})", body.get("description", ""))
+    if space:
+        body["title"] = f"{body['title']} ({space})"
+    return body
+
+
+def render_alert_rule(path: str, space: str | None = None) -> dict:
+    """Alert rule body. A per-space copy only covers its own space's rules and workflow."""
+    body = strip_notes(load_json(path))
+    if space:
+        esql = body["params"]["esqlQuery"]["esql"]
+        first, _, rest = esql.partition("\n")
+        body["params"]["esqlQuery"]["esql"] = f'{first}\n| WHERE lagprof.space.id == "{space}"\n{rest}'
+        body["name"] = f"{body['name']} ({space})"
     return body
 
 
@@ -557,8 +581,51 @@ class InstallOptions:
         return self.space if self.workflow == "per-space" else None
 
 
-def shared_stats_conflict(client: Client, space: str) -> str | None:
-    """Return another space whose copy already writes shared stats, if any."""
+def installed_workflows(client: Client) -> list[dict] | None:
+    """Profiler workflows installed in any space: [{space, name, id, shared_stats}].
+
+    None if workflows can't be listed (for example, the Workflows API is off)."""
+    code, spaces = client.kb("GET", "/api/spaces/space", allow=(403, 404))
+    ids = [s["id"] for s in spaces] if code == 200 and isinstance(spaces, list) else ["default"]
+    found, listed = [], False
+    for sid in ids:
+        code, out = client.kb("GET", f"{space_prefix(sid)}{WORKFLOWS_API}?size=1000", allow=(400, 403, 404))
+        if code != 200:
+            continue
+        listed = True
+        for w in (out or {}).get("results", []):
+            name = str(w.get("name", ""))
+            if name.startswith("lagprof-hourly"):
+                shared = bool(re.search(r"(?m)^\s*write_shared_stats:\s*true\b", w.get("yaml") or ""))
+                found.append({"space": sid, "name": name, "id": w.get("id"), "shared_stats": shared})
+    return found if listed else None
+
+
+def mode_conflict(installed: list[dict], opts: "InstallOptions") -> str | None:
+    """The two workflow versions are alternatives; running both profiles every space twice."""
+    if opts.workflow == "per-space":
+        other = [w for w in installed if w["name"] == "lagprof-hourly-all-spaces"]
+        if other:
+            return ("the all-spaces workflow is installed; install one version, not both. "
+                    "Run uninstall first (history is kept), or use --force")
+    else:
+        other = [w for w in installed if w["name"].startswith("lagprof-hourly-space-")]
+        if other:
+            spaces = ", ".join(sorted({w["space"] for w in other}))
+            return (f"per-space workflows are installed (spaces: {spaces}); install one version, not both. "
+                    "Run uninstall --space <id> for each first (history is kept), or use --force")
+    return None
+
+
+def shared_stats_conflict(client: Client, space: str, installed: list[dict] | None = None) -> str | None:
+    """Return another space whose installed copy already writes shared stats, if any.
+
+    Uses the installed workflows when they can be listed, so a removed copy doesn't
+    block. Otherwise falls back to the last 7 days of run history."""
+    if installed is not None:
+        others = [w["space"] for w in installed
+                  if w["shared_stats"] and w["name"].startswith("lagprof-hourly-space-") and w["space"] != space]
+        return others[0] if others else None
     body = {"size": 1, "_source": ["lagprof.space.id"],
             "query": {"bool": {"filter": [{"term": {"lagprof.wrote_shared_stats": True}},
                                           {"range": {"@timestamp": {"gte": "now-7d"}}}],
@@ -572,14 +639,20 @@ def shared_stats_conflict(client: Client, space: str) -> str | None:
 
 def install(client: Client, rep: Reporter, opts: InstallOptions) -> int:
     space = opts.kibana_space
+    installed = installed_workflows(client) if opts.import_workflow else None
+    if installed is not None and not opts.force:
+        why = mode_conflict(installed, opts)
+        if why:
+            rep.line("BLOCKED", "workflow", opts.workflow, why)
+            return 1
     if opts.workflow == "per-space" and opts.shared_stats and not opts.force:
-        other = shared_stats_conflict(client, opts.space or "")
+        other = shared_stats_conflict(client, opts.space or "", installed)
         if other:
             rep.line("BLOCKED", "workflow", opts.space or "",
                      f"space {other!r} already writes shared stats; use --force to override")
             return 1
     failures = 0
-    for r in pack_resources():
+    for r in pack_resources(space):
         try:
             failures += install_one(client, rep, r, opts, space)
         except HttpError as err:
@@ -637,14 +710,15 @@ def install_one(client: Client, rep: Reporter, r: Resource, opts: InstallOptions
             sync_existing_mappings(client, rep, r)
     elif r.kind == "dashboard":
         # Dashboards API (9.5+): PUT creates with this ID or replaces it.
-        client.kb("PUT", f"{space_prefix(space)}/api/dashboards/{r.name}", render_dashboard(r.path, marker))
+        client.kb("PUT", f"{space_prefix(space)}/api/dashboards/{r.name}", render_dashboard(r.path, marker, space))
     elif r.kind == "role":
         client.kb("PUT", f"/api/security/role/{r.name}", render_role(spaces, marker))
     elif r.kind == "alert_rule":
-        body = strip_notes(load_json(r.path))
+        body = render_alert_rule(r.path, space)
         body["tags"] = [t for t in body.get("tags", []) if not t.startswith("lagprof-version:")]
         body["tags"].append(f"lagprof-version:{marker}")
-        rule_id = body.pop("id")
+        body.pop("id")
+        rule_id = r.name
         base = f"{space_prefix(space)}/api/alerting/rule/{rule_id}"
         if current is None:
             client.kb("POST", base, body)
@@ -738,9 +812,10 @@ def _whoami(client: Client) -> str:
 
 
 def status(client: Client, rep: Reporter, space: str | None = None) -> int:
-    for r in pack_resources():
+    for r in pack_resources(space):
         if r.kind == "workflow":
-            code, out = client.kb("GET", WORKFLOWS_API, allow=(400, 404))
+            # Per-space copies live in their own space.
+            code, out = client.kb("GET", f"{space_prefix(space)}{WORKFLOWS_API}?size=1000", allow=(400, 404))
             names = [f"{w['name']} (id {w['id']})" for w in (out or {}).get("results", [])
                      if str(w.get("name", "")).startswith("lagprof-")] if code == 200 else []
             rep.line("present" if names else "missing", r.kind, ", ".join(names) or r.name,
@@ -775,7 +850,7 @@ def uninstall(client: Client, rep: Reporter, delete_data: bool, space: str | Non
         client.es("DELETE", "/lagprof-rules,lagprof-rule-streams?ignore_unavailable=true", allow=(404,))
         rep.line("deleted", "data", "lagprof-*", "data streams and rule indices")
     failures = 0
-    for r in reversed(pack_resources()):
+    for r in reversed(pack_resources(space)):
         try:
             if r.kind in ES_PATHS:
                 code, out = client.es("DELETE", ES_PATHS[r.kind] + r.name, allow=(400, 404))
@@ -801,8 +876,10 @@ def uninstall(client: Client, rep: Reporter, delete_data: bool, space: str | Non
             elif r.kind == "workflow":
                 prefix = space_prefix(space)
                 code, out = client.kb("GET", f"{prefix}{WORKFLOWS_API}?size=1000", allow=(400, 404))
+                # Only this install's workflow: a per-space copy, or the all-spaces version.
+                wanted = f"lagprof-hourly-space-{space}" if space else "lagprof-hourly-all-spaces"
                 found = [w for w in (out or {}).get("results", [])
-                         if str(w.get("name", "")).startswith("lagprof-hourly")] if code == 200 else []
+                         if w.get("name") == wanted] if code == 200 else []
                 for w in found:
                     client.kb("DELETE", f"{prefix}{WORKFLOWS_API}/workflow/{w['id']}")
                     rep.line("deleted", r.kind, w["name"], f"id {w['id']}")

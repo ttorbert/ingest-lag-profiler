@@ -29,6 +29,7 @@ class FakeCluster:
         self.requests: list[tuple[str, str]] = []
         self.workflows_api = True
         self.workflows: dict[str, dict] = {}
+        self.spaces = ["default", "soc", "team-b"]
 
 
 def make_handler(fake: FakeCluster):
@@ -56,8 +57,12 @@ def make_handler(fake: FakeCluster):
             path = self.path.split("?")[0]
             body = self._body() if method in ("PUT", "POST") else None
             fake.requests.append((method, self.path))
+            req_space = "default"
             if path.startswith("/s/"):  # Kibana space prefix
+                req_space = path.split("/", 3)[2]
                 path = "/" + path.split("/", 3)[3]
+            if path == "/api/spaces/space":
+                return self._send(200, [{"id": s} for s in fake.spaces])
 
             if path == "/" and method == "GET":
                 return self._send(200, {"version": {"number": fake.version, "build_flavor": fake.flavor}})
@@ -84,10 +89,12 @@ def make_handler(fake: FakeCluster):
                         # Like Kibana: IDs of deleted workflows aren't reused.
                         fake.id_counter = getattr(fake, "id_counter", 0) + 1
                         wid = f"{name}-{fake.id_counter}"
-                        fake.workflows[wid] = {"id": wid, "name": name, "yaml": w["yaml"], "valid": True}
+                        fake.workflows[wid] = {"id": wid, "name": name, "yaml": w["yaml"], "valid": True,
+                                               "space": req_space}
                         created.append(fake.workflows[wid])
                     return self._send(200, {"created": created})
-                return self._send(200, {"results": list(fake.workflows.values())})
+                return self._send(200, {"results": [w for w in fake.workflows.values()
+                                                    if w.get("space", "default") == req_space]})
             if path.startswith("/api/workflows/workflow/"):
                 wid = path.rsplit("/", 1)[1]
                 if wid not in fake.workflows:
@@ -399,9 +406,57 @@ class InstallTests(FakeServerCase):
     def test_per_space_role_and_space_prefixed_rules(self):
         opts = lagprof.InstallOptions(workflow="per-space", space="soc", shared_stats=True)
         self.assertEqual(lagprof.install(self.client, self.rep, opts), 0, self.out.getvalue())
-        self.assertEqual(self.fake.store["/api/security/role/lagprof-workflow"]["kibana"][0]["spaces"], ["soc"])
+        self.assertEqual(self.fake.store["/api/security/role/lagprof-workflow-soc"]["kibana"][0]["spaces"], ["soc"])
         self.assertTrue(any(p.startswith("/s/soc/api/alerting/rule/") for _, p in self.fake.requests))
         self.assertTrue((ROOT / "build/lagprof-hourly-space-soc.yaml").exists())
+
+    def test_per_space_copies_do_not_share_role_dashboard_or_alerts(self):
+        # Kibana dashboard and alert IDs are unique across spaces; one role would be rewritten.
+        for space, shared in (("soc", True), ("team-b", False)):
+            opts = lagprof.InstallOptions(workflow="per-space", space=space, shared_stats=shared)
+            self.assertEqual(lagprof.install(self.client, self.rep, opts), 0, self.out.getvalue())
+        store = self.fake.store
+        self.assertEqual(store["/api/security/role/lagprof-workflow-soc"]["kibana"][0]["spaces"], ["soc"])
+        self.assertEqual(store["/api/security/role/lagprof-workflow-team-b"]["kibana"][0]["spaces"], ["team-b"])
+        self.assertNotIn("/api/security/role/lagprof-workflow", store)
+        posted = [p for m, p in self.fake.requests if m in ("POST", "PUT")]
+        for space in ("soc", "team-b"):
+            self.assertIn(f"/s/{space}/api/dashboards/lagprof-overview-{space}", posted)
+            self.assertIn(f"/s/{space}/api/alerting/rule/lagprof-miss-rate-{space}", posted)
+        rule = store["/api/alerting/rule/lagprof-miss-rate-team-b"]
+        self.assertIn('| WHERE lagprof.space.id == "team-b"', rule["params"]["esqlQuery"]["esql"])
+        self.assertTrue(rule["name"].endswith("(team-b)"))
+
+    def test_status_finds_per_space_workflow_in_its_space(self):
+        opts = lagprof.InstallOptions(workflow="per-space", space="soc", shared_stats=True)
+        self.assertEqual(lagprof.install(self.client, self.rep, opts), 0)
+        self.rep.lines.clear()
+        lagprof.status(self.client, self.rep, "soc")
+        self.assertIn("present", [s for s, k, n in self.statuses() if k == "workflow"])
+
+    def test_mixing_workflow_versions_is_blocked(self):
+        self.assertEqual(lagprof.install(self.client, self.rep, lagprof.InstallOptions()), 0)
+        opts = lagprof.InstallOptions(workflow="per-space", space="soc", shared_stats=True)
+        self.assertEqual(lagprof.install(self.client, self.rep, opts), 1)
+        self.assertIn(("BLOCKED", "workflow", "per-space"), self.statuses())
+        opts.force = True
+        self.assertEqual(lagprof.install(self.client, self.rep, opts), 0, self.out.getvalue())
+
+    def test_all_spaces_blocked_when_per_space_installed(self):
+        opts = lagprof.InstallOptions(workflow="per-space", space="soc", shared_stats=True)
+        self.assertEqual(lagprof.install(self.client, self.rep, opts), 0)
+        self.assertEqual(lagprof.install(self.client, self.rep, lagprof.InstallOptions()), 1)
+        self.assertIn(("BLOCKED", "workflow", "all-spaces"), self.statuses())
+
+    def test_shared_stats_check_uses_installed_copies(self):
+        soc = lagprof.InstallOptions(workflow="per-space", space="soc", shared_stats=True)
+        team_b = lagprof.InstallOptions(workflow="per-space", space="team-b", shared_stats=True)
+        self.assertEqual(lagprof.install(self.client, self.rep, soc), 0)
+        self.assertEqual(lagprof.install(self.client, self.rep, team_b), 1)
+        self.assertIn(("BLOCKED", "workflow", "team-b"), self.statuses())
+        # Once soc's copy is removed, team-b may take over, whatever the run history says.
+        lagprof.uninstall(self.client, self.rep, False, "soc")
+        self.assertEqual(lagprof.install(self.client, self.rep, team_b), 0, self.out.getvalue())
 
     def test_workflow_imported_then_unchanged_then_updated(self):
         lagprof.install(self.client, self.rep, lagprof.InstallOptions())

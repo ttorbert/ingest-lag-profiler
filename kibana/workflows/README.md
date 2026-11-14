@@ -12,7 +12,8 @@ Detection rules belong to a Kibana space, and a rule search only returns rules f
 | Cluster cost per hour | Scans `logs-*` 3 times | Scans `logs-*` once per space, plus twice in the copy that writes shared stats |
 | If a run fails | No space gets new results that hour | Only that copy's space is affected |
 | Setup mistakes to watch for | Few | Exactly one copy must set `write_shared_stats: true`. If none do, the stream and host panels go empty. If several do, their duplicate rows are skipped, but each one repeats two `logs-*` scans. The installer refuses a second `--shared-stats` copy unless you add `--force`. |
-| Dashboard | Same for both. Results carry `lagprof.space.id`, so you can filter by space. | Same |
+| Dashboard and alerts | One dashboard and two alert rules, in the Default space. Results carry `lagprof.space.id`, so you can filter by space. | Each copy gets its own: dashboard *Ingest Lag Profiler (<space>)*, and alert rules that cover only that space's rules and workflow |
+| Role | `lagprof-workflow` | One per copy: `lagprof-workflow-<space>` |
 
 ## Which to pick
 
@@ -43,7 +44,7 @@ Check: after the first hour, the Profiler health panel should show one successfu
 
 ## Switching between versions
 
-Disable or delete the current workflow, then install the other one. The next run's stale-pair cleanup removes leftover rule documents. In per-space mode, a space with no copy any more keeps its old rule documents until you delete them:
+Uninstall the current version (`uninstall`, or `uninstall --space <id>` for each per-space copy; history is kept), then install the other one. The installer refuses to install one version while the other is installed, unless you add `--force`. The next run's stale-pair cleanup removes leftover rule documents. In per-space mode, a space with no copy any more keeps its old rule documents until you delete them:
 
 ```
 POST /lagprof-rules,lagprof-rule-streams/_delete_by_query
