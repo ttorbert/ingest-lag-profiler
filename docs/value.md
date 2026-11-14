@@ -13,7 +13,7 @@ Most teams have no measurement of this. How far back each rule looks is usually 
 Every hour, inside your existing Elastic deployment, the profiler:
 
 1. **Measures how late logs arrive** for every data source your detection rules use.
-2. **Estimates, for each rule, what share of its events arrive too late to be checked**, and recommends a setting that would close the gap.
+2. **Estimates, for each rule, how many of its events arrive too late to be checked, and what share that is**, and recommends a setting that would close the gap.
 3. **Points to the cause:** a slow host, a source system with a wrong clock, or logs that can't be measured at all.
 4. **Keeps a history and alerts** when any rule's estimated miss rate passes a threshold (1% by default).
 

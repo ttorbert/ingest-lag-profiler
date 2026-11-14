@@ -14,6 +14,10 @@ The rules at risk are:
 
 The dashboard's *Rule coverage* panel shows which group each rule is in.
 
+![Ingest Lag Profiler dashboard: rules at risk ranked by estimated missed events, with recommended look-backs, plus lag trends, slow hosts, clock problems, measurement gaps and rule coverage](docs/images/dashboard.png)
+
+*The dashboard after an hour of lab traffic (`make lab-traffic`). See the [user guide](docs/user-guide.md#the-dashboard) for each panel.*
+
 **Cost.** The hourly miss-rate query takes about 1 second per million events in the hour on a single-node laptop lab, however many rules search each stream.
 
 ## Documentation

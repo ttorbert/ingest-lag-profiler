@@ -41,6 +41,8 @@ In general, events later than *look-back − interval* start to be missed, and e
 
 Open **Dashboards › Ingest Lag Profiler**. It shows the last 7 days by default; change the range in the time picker.
 
+![The Ingest Lag Profiler dashboard in the lab](images/dashboard.png)
+
 ### Rules at risk (latest hour)
 
 The panel to act on: rules with an estimated miss rate above 0.1% in the newest hour, sorted by estimated missed events, most first.
