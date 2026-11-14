@@ -64,7 +64,7 @@ The dashboard's *Rule coverage* panel shows which group each rule is in.
 
 Other commands: `status` (installed versions), `uninstall` (keeps history unless `--delete-data`), `lint` (offline checks), `render-workflow` (writes the workflow YAML to `build/` for a manual import).
 
-**Known issue:** in per-space mode, `uninstall --space <id>` also removes the ingest pipelines the other copies share. Run `install` again for a remaining copy afterwards. See [known issues](ingest-lag-profiler-design.md#known-issues).
+In per-space mode, `uninstall --space <id>` removes only that copy while other copies remain: shared templates, pipelines and indices stay, and `--delete-data` deletes only that space's documents.
 
 ### Workflow identity
 
@@ -97,7 +97,7 @@ make lab-down      # stop (keeps data); make lab-reset deletes everything
 ## Development
 
 ```bash
-make test             # lint, 43 installer unit tests, quick formula simulation (no cluster needed)
+make test             # lint, 47 installer unit tests, quick formula simulation (no cluster needed)
 make simulate         # full formula simulation
 make test-pipelines   # ingest pipeline fixtures against the lab
 make dashboard        # run the dashboard queries against the lab, then rebuild its JSON

@@ -387,7 +387,7 @@ The lab's target type is called `docker` because it runs in containers. Rancher 
 | `check` | Connects and detects Serverless from the build flavor (it warns if that disagrees with `LAGPROF_TARGET`). On stateful targets it checks the version and the license, and starts a trial on a basic-licensed lab. On every target it checks that the Workflows API answers, and what share of the last hour's `logs-*` events have `event.ingested` (a warning only). It doesn't check the Serverless project type or custom roles yet. |
 | `install` | Runs `check`, then loads in order: component and index templates, ingest pipelines, the two rule indices, the four data streams (empty), the role, the workflow (chosen version), the dashboard and the alert rules. Safe to run again. |
 | `status` | Lists each resource as `current`, `outdated`, `missing` or `present` |
-| `uninstall` | Removes the resources in reverse order. History indices are kept unless `--delete-data` is given. |
+| `uninstall` | Removes the resources in reverse order. History indices are kept unless `--delete-data` is given. While other profiler workflows are installed (other per-space copies), it keeps the shared templates, pipelines, indices and data streams, and `--delete-data` deletes only that space's documents. |
 | `lint` | Offline checks; see [Notes for reviewers](#notes-for-reviewers) |
 | `render-workflow` | Writes the ready-to-import workflow YAML to `build/` without connecting |
 
@@ -610,10 +610,12 @@ The first release takes about 37 to 56 hours across six milestones. That's more 
 
 ### Known issues
 
-Found in the Nov 14, 2026 code review. They're not fixed yet.
+Found in the Nov 14, 2026 code review.
 
-- **Uninstalling one per-space copy breaks the others.** `uninstall --space <id>` removes the shared resources too: the ingest pipelines (and the index templates that aren't held by a data stream). The other copies' next run then fails at the rule write. Their failure summary also uses the deleted `lagprof-stamp` pipeline, so no `failed` run is recorded either; only the stale-profiler alert notices. **Workaround:** run `install` again for a remaining copy. **Fix:** in per-space mode, `uninstall` should remove only that space's workflow, role, dashboard and alert rules, unless no other copy is installed.
-- **`uninstall --space <id> --delete-data` deletes every space's history**, not just that space's.
+- **Fixed Nov 14, 2026: uninstalling one per-space copy broke the others.** `uninstall --space <id>` used to remove the shared ingest pipelines, so the remaining copies' runs failed, and their failure summaries failed too because `lagprof-stamp` was gone. `--delete-data` also deleted every space's history. Now, while other profiler workflows are installed, `uninstall` keeps the shared resources, and `--delete-data` deletes only that space's documents with a delete-by-query on `lagprof.space.id`.
+
+Not fixed yet:
+
 - **The per-space dashboard isn't filtered to its space.** Each copy's panels show every space's results. The alert rules are filtered.
 - **1-minute rules:** the [miss model](docs/miss-model.md) says their estimate can be slightly low near the edge of the margin. The user guide says so; the dashboard note doesn't.
 
@@ -649,7 +651,7 @@ Found in the Nov 14, 2026 code review. They're not fixed yet.
 
 | Command | What it runs | Needs |
 | --- | --- | --- |
-| `make test` | `lint`, 43 installer unit tests against a fake cluster, a 20,000-trial formula simulation | Nothing |
+| `make test` | `lint`, 47 installer unit tests against a fake cluster, a 20,000-trial formula simulation | Nothing |
 | `make simulate` | The full 100,000-trial simulation, as Markdown | Nothing |
 | `make test-pipelines` | 19 `_simulate` fixture cases for the three pipelines | The lab |
 | `make dashboard` | Every dashboard query, then rebuilds the JSON | The lab |

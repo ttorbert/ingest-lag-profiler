@@ -105,6 +105,9 @@ def make_handler(fake: FakeCluster):
                     del fake.workflows[wid]
                     return self._send(200, {})
                 return self._send(200, fake.workflows[wid])
+            if path.endswith("/_delete_by_query") and method == "POST":
+                fake.delete_by_query = getattr(fake, "delete_by_query", []) + [(path, body)]
+                return self._send(200, {"deleted": 0})
             if path == "/_query":
                 return self._send(200, {"columns": [], "values": [[1000, 990]]})
             if path == "/lagprof-runs/_search":
@@ -457,6 +460,53 @@ class InstallTests(FakeServerCase):
         # Once soc's copy is removed, team-b may take over, whatever the run history says.
         lagprof.uninstall(self.client, self.rep, False, "soc")
         self.assertEqual(lagprof.install(self.client, self.rep, team_b), 0, self.out.getvalue())
+
+    def _install_two_copies(self):
+        for space, shared in (("default", True), ("soc", False)):
+            opts = lagprof.InstallOptions(workflow="per-space", space=space, shared_stats=shared)
+            self.assertEqual(lagprof.install(self.client, self.rep, opts), 0, self.out.getvalue())
+        self.rep.lines.clear()
+
+    def test_uninstall_one_copy_keeps_shared_resources(self):
+        self._install_two_copies()
+        self.assertEqual(lagprof.uninstall(self.client, self.rep, False, "default"), 0)
+        # soc's runs still need the pipelines, templates and indices.
+        for name in ("lagprof-rules-parse", "lagprof-streams-parse", "lagprof-stamp"):
+            self.assertIn(f"/_ingest/pipeline/{name}", self.fake.store)
+            self.assertIn(("kept", "pipeline", name), self.statuses())
+        self.assertIn("/_component_template/lagprof-common", self.fake.store)
+        self.assertIn("/_index_template/lagprof-rules", self.fake.store)
+        # default's own resources go.
+        self.assertIn(("deleted", "workflow", "lagprof-hourly-space-default"), self.statuses())
+        self.assertIn(("deleted", "role", "lagprof-workflow-default"), self.statuses())
+        self.assertNotIn("/api/security/role/lagprof-workflow-default", self.fake.store)
+        self.assertIn("/api/security/role/lagprof-workflow-soc", self.fake.store)
+        self.assertEqual([w["name"] for w in self.fake.workflows.values()], ["lagprof-hourly-space-soc"])
+
+    def test_uninstall_last_copy_removes_shared_resources(self):
+        self._install_two_copies()
+        lagprof.uninstall(self.client, self.rep, False, "default")
+        self.rep.lines.clear()
+        lagprof.uninstall(self.client, self.rep, False, "soc")
+        self.assertIn(("deleted", "pipeline", "lagprof-rules-parse"), self.statuses())
+        self.assertNotIn("/_ingest/pipeline/lagprof-rules-parse", self.fake.store)
+
+    def test_uninstall_one_copy_delete_data_only_touches_its_space(self):
+        self._install_two_copies()
+        lagprof.uninstall(self.client, self.rep, True, "default")
+        self.assertNotIn(("DELETE", "/_data_stream/lagprof-*"), self.fake.requests)
+        self.assertNotIn("DELETE", [m for m, p in self.fake.requests if p.startswith("/lagprof-rules")])
+        self.assertEqual(len(self.fake.delete_by_query), 1)
+        path, body = self.fake.delete_by_query[0]
+        self.assertTrue(path.startswith("/lagprof-*/"))
+        self.assertEqual(body, {"query": {"term": {"lagprof.space.id": "default"}}})
+
+    def test_uninstall_last_copy_delete_data_deletes_everything(self):
+        opts = lagprof.InstallOptions(workflow="per-space", space="soc", shared_stats=True)
+        lagprof.install(self.client, self.rep, opts)
+        lagprof.uninstall(self.client, self.rep, True, "soc")
+        self.assertIn(("DELETE", "/_data_stream/lagprof-*"), self.fake.requests)
+        self.assertFalse(getattr(self.fake, "delete_by_query", []))
 
     def test_workflow_imported_then_unchanged_then_updated(self):
         lagprof.install(self.client, self.rep, lagprof.InstallOptions())

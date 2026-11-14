@@ -7,7 +7,8 @@ or a Serverless project. Uses only the Python standard library.
     lagprof.py check     --target-file targets/docker.env
     lagprof.py install   --target-file targets/docker.env [--workflow per-space --space soc --shared-stats]
     lagprof.py status    --target-file targets/docker.env
-    lagprof.py uninstall --target-file targets/docker.env [--delete-data --yes]
+    lagprof.py uninstall --target-file targets/docker.env [--space soc] [--delete-data --yes]
+                         # keeps shared templates, pipelines and data while other copies remain
     lagprof.py lint                      # offline checks of the pack files
     lagprof.py render-workflow --workflow per-space --space soc   # write the YAML to build/
 
@@ -844,13 +845,53 @@ def status(client: Client, rep: Reporter, space: str | None = None) -> int:
     return 0
 
 
+# Templates, pipelines, indices and data streams are shared by every installed workflow:
+# the all-spaces version, or each per-space copy.
+SHARED_KINDS = ("component_template", "index_template", "pipeline", "index", "data_stream")
+
+
+def workflow_name(space: str | None) -> str:
+    return f"lagprof-hourly-space-{space}" if space else "lagprof-hourly-all-spaces"
+
+
+def other_workflows(client: Client, space: str | None) -> list[dict] | None:
+    """Installed profiler workflows other than the one this uninstall removes.
+
+    None if workflows can't be listed."""
+    installed = installed_workflows(client)
+    if installed is None:
+        return None
+    return [w for w in installed if w["name"] != workflow_name(space)]
+
+
 def uninstall(client: Client, rep: Reporter, delete_data: bool, space: str | None = None) -> int:
+    others = other_workflows(client, space)
+    if others is None:
+        rep.line("WARN", "workflow", "*", "couldn't list workflows to check for other copies; "
+                 "removing shared resources too")
+        others = []
+    # While another copy is installed, its runs need the shared resources and data.
+    shared_with = ", ".join(sorted(f"{w['name']} ({w['space']})" for w in others))
     if delete_data:
-        client.es("DELETE", "/_data_stream/lagprof-*", allow=(404,))
-        client.es("DELETE", "/lagprof-rules,lagprof-rule-streams?ignore_unavailable=true", allow=(404,))
-        rep.line("deleted", "data", "lagprof-*", "data streams and rule indices")
+        if not others:
+            client.es("DELETE", "/_data_stream/lagprof-*", allow=(404,))
+            client.es("DELETE", "/lagprof-rules,lagprof-rule-streams?ignore_unavailable=true", allow=(404,))
+            rep.line("deleted", "data", "lagprof-*", "data streams and rule indices")
+        elif space:
+            # Only this space's documents. Stream stats and host lag have no space and
+            # are shared, so they stay.
+            client.es("POST", "/lagprof-*/_delete_by_query?conflicts=proceed&refresh=true"
+                      "&allow_no_indices=true&ignore_unavailable=true",
+                      {"query": {"term": {"lagprof.space.id": space}}})
+            rep.line("deleted", "data", "lagprof-*", f"documents for space {space!r}; "
+                     f"shared stream and host stats kept for {shared_with}")
+        else:
+            rep.line("kept", "data", "lagprof-*", f"other workflows are installed: {shared_with}")
     failures = 0
     for r in reversed(pack_resources(space)):
+        if others and r.kind in SHARED_KINDS:
+            rep.line("kept", r.kind, r.name, f"shared with {shared_with}")
+            continue
         try:
             if r.kind in ES_PATHS:
                 code, out = client.es("DELETE", ES_PATHS[r.kind] + r.name, allow=(400, 404))
@@ -877,7 +918,7 @@ def uninstall(client: Client, rep: Reporter, delete_data: bool, space: str | Non
                 prefix = space_prefix(space)
                 code, out = client.kb("GET", f"{prefix}{WORKFLOWS_API}?size=1000", allow=(400, 404))
                 # Only this install's workflow: a per-space copy, or the all-spaces version.
-                wanted = f"lagprof-hourly-space-{space}" if space else "lagprof-hourly-all-spaces"
+                wanted = workflow_name(space)
                 found = [w for w in (out or {}).get("results", [])
                          if w.get("name") == wanted] if code == 200 else []
                 for w in found:
@@ -1077,7 +1118,8 @@ def main(argv: list[str] | None = None) -> int:
             return status(client, rep, args.space)
         if args.cmd == "uninstall":
             if args.delete_data and not args.yes:
-                answer = input("Delete all lagprof-* data, including history? Type 'delete': ")
+                answer = input("Delete lagprof-* data, including history? If other profiler workflows "
+                               "are installed, only this space's documents are deleted. Type 'delete': ")
                 if answer.strip() != "delete":
                     rep.note("Cancelled.")
                     return 1

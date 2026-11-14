@@ -56,7 +56,7 @@ POST /lagprof-rules,lagprof-rule-streams/_delete_by_query
 
 History in `lagprof-results` is kept either way.
 
-**Known issue:** `uninstall --space <id>` also deletes the ingest pipelines that the other per-space copies use. When removing only some copies, run `install` again for one remaining copy afterwards. See the design doc's [Known issues](../../ingest-lag-profiler-design.md#known-issues).
+Removing some per-space copies is safe: while any profiler workflow remains, `uninstall` keeps the shared templates, pipelines and indices.
 
 ## Status
 

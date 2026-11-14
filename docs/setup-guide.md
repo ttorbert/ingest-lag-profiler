@@ -253,12 +253,12 @@ Pull the new version and run `install` again with the same options. Changed reso
 
 ```bash
 python3 scripts/lagprof.py uninstall --target-file targets/prod.env                 # keep history
-python3 scripts/lagprof.py uninstall --target-file targets/prod.env --delete-data   # remove everything
+python3 scripts/lagprof.py uninstall --target-file targets/prod.env --delete-data   # remove history too
 ```
 
 In per-space mode, add `--space <id>` for each space. The `lagprof-runner` user and its API key aren't touched; delete them yourself if you no longer need them.
 
-> **Known issue, per-space mode:** `uninstall --space <id>` also removes the ingest pipelines that every copy shares. If you remove only some copies, run `install` again for one of the remaining copies straight afterwards, or their next runs fail. `--delete-data` deletes every space's history, not just that space's. See the design doc's [Known issues](../ingest-lag-profiler-design.md#known-issues).
+While other per-space copies remain, `uninstall --space <id>` removes only that copy's workflow, role, dashboard and alert rules. The shared templates, pipelines and indices stay for the other copies. With `--delete-data`, it deletes only that space's documents; stream stats and host lag are shared, so they stay. Uninstalling the last copy removes everything.
 
 ## Serverless
 

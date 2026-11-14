@@ -17,7 +17,7 @@ This plan turns the design into a shippable pack. It has three parts: changes th
 | 4. Dashboard, alerts and full installer | Done |
 | 5. Validation and release | Lab validation passed. Cloud and Serverless smoke tests, and the `v0.1.0` tag, are still to do. |
 
-**Known issues** from the code review are listed in the design doc under [Known issues](ingest-lag-profiler-design.md#known-issues). The most important one is that `uninstall --space <id>` deletes the ingest pipelines that the other per-space copies still use.
+**Known issues** from the code review are listed in the design doc under [Known issues](ingest-lag-profiler-design.md#known-issues). The most important one, per-space `uninstall` deleting resources the other copies still use, was fixed on Nov 14, 2026.
 
 Revised estimate: **37 to 56 hours** (the design said 24 to 38). The difference is:
 - a new Milestone 0 to settle the open questions first
@@ -46,7 +46,7 @@ The lab runs on Rancher Desktop with Elasticsearch and Kibana 9.5.6. `make lab-u
 - **Installer:**
   - `check`, `install`, `status`, `uninstall`, `lint` and `render-workflow`, with workflow import through the API.
   - Running `install` again reports everything `unchanged`.
-  - 30 unit tests against a fake cluster at the time; 43 now.
+  - 30 unit tests against a fake cluster at the time; 47 now.
 - **Alert rules:** both are installed, and Kibana accepted their ES|QL settings. They haven't been made to fire yet.
 
 **Changes from the plan, found in the lab:**
@@ -85,9 +85,10 @@ The lab runs on Rancher Desktop with Elasticsearch and Kibana 9.5.6. `make lab-u
 - **New installs:** the workflow checks `logs-*` for data and for `event.ingested` before running the queries. When there's nothing to measure, it records a `no_data` run with a reason instead of failing. The stale-profiler alert and the health panel treat `no_data` as a completed run.
 - **Per-space installs** into more than one space: each copy now gets its own role, dashboard and alert rules (Kibana IDs are unique across spaces). The installer refuses to mix the two workflow versions.
 - **Lab workflow runner:** finds workflows by name, not ID.
+- **Per-space `uninstall` fixed** (Nov 14, 2026, after the code review): while other profiler workflows are installed, it keeps the shared templates, pipelines, indices and data streams, and `--delete-data` deletes only that space's documents. Four unit tests cover it.
 
 **Next:**
-1. Fix the [known issues](ingest-lag-profiler-design.md#known-issues), starting with per-space `uninstall`.
+1. Fix the remaining [known issues](ingest-lag-profiler-design.md#known-issues): the per-space dashboard filter and the 1-minute rule note.
 2. Run the installer smoke tests on Elastic Cloud and Serverless. They need accounts.
 3. Measure query time on a production-size cluster. The lab measured up to 3 million events an hour, at about 1 second per million.
 4. Page the rules find call, or warn, for spaces with more than 10,000 enabled rules.
@@ -198,7 +199,7 @@ ingest-lag-profiler/
 ├── targets/                          As planned below
 └── tests/
     ├── model/simulate_rule_schedule.py
-    ├── installer/test_lagprof.py     43 unit tests against a fake cluster
+    ├── installer/test_lagprof.py     47 unit tests against a fake cluster
     ├── pipelines/                    fixtures.json (19 cases) and run_simulate.py
     └── lab/                          Spikes and helpers run by hand: spike_esql.py, seed_rules.py,
                                       run_workflow.py, analyze_prebuilt_rules.py, workflows/spike-*.yaml
