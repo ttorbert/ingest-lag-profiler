@@ -28,7 +28,10 @@ The dashboard's *Rule coverage* panel shows which group each rule is in.
 | [Setup guide](docs/setup-guide.md) | Installing it in an Elastic deployment, step by step |
 | [User guide](docs/user-guide.md) | Reading the dashboard and acting on findings |
 | [Validation results](docs/validation-results.md) | How the estimates were tested against real rules |
+| [Miss model](docs/miss-model.md) | The formula, its simulation check, and what it leaves out |
 | [Field reference](docs/fields.md) | Every field in the `lagprof-*` indices |
+| [Design](ingest-lag-profiler-design.md) | How it works, as built, with [notes for reviewers](ingest-lag-profiler-design.md#notes-for-reviewers) and [known issues](ingest-lag-profiler-design.md#known-issues) |
+| [Build plan](build-plan.md) | Milestones, what's done, and what's next |
 
 ## Requirements
 
@@ -59,7 +62,9 @@ The dashboard's *Rule coverage* panel shows which group each rule is in.
        --workflow per-space --space soc --shared-stats
    ```
 
-Other commands: `status` (installed versions), `uninstall` (keeps history unless `--delete-data`), `lint` (offline checks).
+Other commands: `status` (installed versions), `uninstall` (keeps history unless `--delete-data`), `lint` (offline checks), `render-workflow` (writes the workflow YAML to `build/` for a manual import).
+
+**Known issue:** in per-space mode, `uninstall --space <id>` also removes the ingest pipelines the other copies share. Run `install` again for a remaining copy afterwards. See [known issues](ingest-lag-profiler-design.md#known-issues).
 
 ### Workflow identity
 
@@ -92,9 +97,11 @@ make lab-down      # stop (keeps data); make lab-reset deletes everything
 ## Development
 
 ```bash
-make test             # lint, unit tests, quick formula simulation (no cluster needed)
+make test             # lint, 43 installer unit tests, quick formula simulation (no cluster needed)
 make simulate         # full formula simulation
 make test-pipelines   # ingest pipeline fixtures against the lab
+make dashboard        # run the dashboard queries against the lab, then rebuild its JSON
+make package          # zip the pack into dist/
 ```
 
 | Path | Contents |
@@ -106,7 +113,7 @@ make test-pipelines   # ingest pipeline fixtures against the lab
 | [scripts/lagprof.py](scripts/lagprof.py) | Installer for Docker, self-managed, Cloud and Serverless |
 | [scripts/lab/](scripts/lab/) | Rancher Desktop lab, traffic generator, validation |
 | [kibana/dashboards/](kibana/dashboards/) | Dashboard; `build.py` writes the JSON from readable ES\|QL queries |
-| [tests/](tests/) | Formula simulation, installer unit tests, pipeline fixtures |
-| [docs/](docs/) | Miss model, field reference, validation results |
+| [tests/](tests/) | Formula simulation, installer unit tests, pipeline fixtures; `tests/lab/` holds spikes and helpers run by hand |
+| [docs/](docs/) | Value, setup and user guides, miss model, field reference, validation results |
 
-Design: [ingest-lag-profiler-design.md](ingest-lag-profiler-design.md). Build plan: [build-plan.md](build-plan.md).
+Design: [ingest-lag-profiler-design.md](ingest-lag-profiler-design.md). Reviewing the code? Start with its [notes for reviewers](ingest-lag-profiler-design.md#notes-for-reviewers): the code map and the invariants a change can break. Build plan: [build-plan.md](build-plan.md).

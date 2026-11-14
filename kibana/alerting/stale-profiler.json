@@ -3,7 +3,7 @@
     "Created with POST /api/alerting/rule/lagprof-stale-profiler. Keys starting with _lagprof are removed before sending.",
     "Fires for each workflow (all-spaces, or each per-space copy) that ran in the last 7 days but has no completed run (success or no_data) in the last 3 hours.",
     "A copy that never ran at all isn't detected; the Profiler health panel shows that.",
-    "VERIFY in Milestone 0: the .es-query ES|QL params shape on 9.5."
+    "Confirmed on 9.5.6: Kibana accepts this .es-query ES|QL params shape (esqlQuery, timeField, timeWindowSize/Unit, threshold [0] with \">\")."
   ],
   "id": "lagprof-stale-profiler",
   "name": "Ingest Lag Profiler: no completed run in 3 hours",

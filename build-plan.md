@@ -1,8 +1,23 @@
 # Ingest Lag Profiler: Build Plan
 
-Nov 13, 2026 · companion to [ingest-lag-profiler-design.md](ingest-lag-profiler-design.md)
+Nov 13, 2026 · companion to [ingest-lag-profiler-design.md](ingest-lag-profiler-design.md) · status updated Nov 14, 2026 after a code review
 
 This plan turns the design into a shippable pack. It has three parts: changes the design needs before building, the repository layout with what goes in each file, and the build sequence with tasks and done criteria for each milestone.
+
+**How to read it now.** The status sections below are current. Parts 1 to 3 are the plan as written before the build. Their checkboxes are ticked to show what was done, and *As built* notes mark where the code differs. For how things work today, the [design doc](ingest-lag-profiler-design.md) follows the code.
+
+## Status at a glance (Nov 14, 2026)
+
+| Milestone | Status |
+| --- | --- |
+| 0. Lab and spikes | Done. The Serverless and Cloud desk check is still open. |
+| 1. Lag measurement | Done. Fixtures went to `tests/pipelines/` and lab checks, not `tests/esql/`. |
+| 2. Rule inventory | Done |
+| 3. Miss estimates and history | Done. The cost test reached 3 million events an hour, not 10 million. |
+| 4. Dashboard, alerts and full installer | Done |
+| 5. Validation and release | Lab validation passed. Cloud and Serverless smoke tests, and the `v0.1.0` tag, are still to do. |
+
+**Known issues** from the code review are listed in the design doc under [Known issues](ingest-lag-profiler-design.md#known-issues). The most important one is that `uninstall --space <id>` deletes the ingest pipelines that the other per-space copies still use.
 
 Revised estimate: **37 to 56 hours** (the design said 24 to 38). The difference is:
 - a new Milestone 0 to settle the open questions first
@@ -31,7 +46,7 @@ The lab runs on Rancher Desktop with Elasticsearch and Kibana 9.5.6. `make lab-u
 - **Installer:**
   - `check`, `install`, `status`, `uninstall`, `lint` and `render-workflow`, with workflow import through the API.
   - Running `install` again reports everything `unchanged`.
-  - 30 unit tests against a fake cluster.
+  - 30 unit tests against a fake cluster at the time; 43 now.
 - **Alert rules:** both are installed, and Kibana accepted their ES|QL settings. They haven't been made to fire yet.
 
 **Changes from the plan, found in the lab:**
@@ -64,10 +79,20 @@ The lab runs on Rancher Desktop with Elasticsearch and Kibana 9.5.6. `make lab-u
   - Checked in the lab: the index was recreated and refilled by the next run, with identical query output and the validation still passing.
 - **Query cost:** the miss-rate query now joins rules to per-second lag counts instead of raw events. That's about 20 times faster, and flat in rules per stream: 3 million events with 50 rules in 3.8 s. Results are identical apart from noise in the approximate percentiles.
 
+**Done after the second session** (commits after the initial version):
+- **Docs:** the setup guide, user guide and value docs, with a dashboard screenshot.
+- **Dashboard:** *Rules at risk* now sorts by estimated missed events, and shows the additional look-back to enter in Kibana. Its Rule column is wider.
+- **New installs:** the workflow checks `logs-*` for data and for `event.ingested` before running the queries. When there's nothing to measure, it records a `no_data` run with a reason instead of failing. The stale-profiler alert and the health panel treat `no_data` as a completed run.
+- **Per-space installs** into more than one space: each copy now gets its own role, dashboard and alert rules (Kibana IDs are unique across spaces). The installer refuses to mix the two workflow versions.
+- **Lab workflow runner:** finds workflows by name, not ID.
+
 **Next:**
-1. Run the installer smoke tests on Elastic Cloud and Serverless. They need accounts.
-2. Measure query time on a production-size cluster. The lab measured up to 3 million events an hour, at about 1 second per million.
-4. ES|QL rule support, low priority: 348 of 354 prebuilt ES|QL rules search on `event.ingested`, so it matters only for custom ES|QL rules.
+1. Fix the [known issues](ingest-lag-profiler-design.md#known-issues), starting with per-space `uninstall`.
+2. Run the installer smoke tests on Elastic Cloud and Serverless. They need accounts.
+3. Measure query time on a production-size cluster. The lab measured up to 3 million events an hour, at about 1 second per million.
+4. Page the rules find call, or warn, for spaces with more than 10,000 enabled rules.
+5. Tag `v0.1.0` and attach the `make package` zip.
+6. ES|QL rule support, low priority: 348 of 354 prebuilt ES|QL rules search on `event.ingested`, so it matters only for custom ES|QL rules.
 
 ---
 
@@ -136,6 +161,53 @@ Ordered by impact. Items marked **verify** are my best understanding and should 
 
 ## Part 2: Repository layout and contents
 
+### As built (Nov 14, 2026)
+
+```
+ingest-lag-profiler/
+├── README.md, VERSION, Makefile
+├── ingest-lag-profiler-design.md     Design, kept at the root (not moved to docs/design.md)
+├── build-plan.md                     This file
+├── docs/
+│   ├── value.md                      Why use it: value, costs, limits
+│   ├── setup-guide.md                Step-by-step install
+│   ├── user-guide.md                 Reading the dashboard and acting on findings
+│   ├── miss-model.md                 Formula, simulation, what it leaves out
+│   ├── fields.md                     Field reference
+│   ├── validation-results.md         Milestone 5 results
+│   └── images/dashboard.png
+├── elasticsearch/                    As planned below
+├── esql/                             As planned below
+├── kibana/
+│   ├── workflows/                    README.md and the two YAML files
+│   ├── dashboards/
+│   │   ├── build.py                  Readable panel queries; writes the JSON
+│   │   └── lagprof-overview.json     Dashboards API body (generated)
+│   └── alerting/                     miss-rate.json, stale-profiler.json
+├── scripts/
+│   ├── lagprof.py                    Installer: check | install | status | uninstall | lint | render-workflow
+│   └── lab/
+│       ├── docker-compose.yml        ES + Kibana 9.5.6, TLS, trial; one-time certs and setup services
+│       ├── .env.example, init-env.sh Lab passwords (init-env.sh creates .env)
+│       ├── rancher-setup.sh          Engine and VM checks, vm.max_map_count (--persist)
+│       ├── wait-ready.sh             Waits for ES and Kibana
+│       ├── generate-events.py        Lab traffic: normal, slow, bursty, clock-ahead hosts; a legacy dataset
+│       ├── lab-owner.py              Creates lagprof-runner and its API key (make lab-owner)
+│       ├── validate.py               Replaces the three planned validation scripts: setup | send | score
+│       └── cost_test.py              Miss-rate query cost: load | run | clean
+├── targets/                          As planned below
+└── tests/
+    ├── model/simulate_rule_schedule.py
+    ├── installer/test_lagprof.py     43 unit tests against a fake cluster
+    ├── pipelines/                    fixtures.json (19 cases) and run_simulate.py
+    └── lab/                          Spikes and helpers run by hand: spike_esql.py, seed_rules.py,
+                                      run_workflow.py, analyze_prebuilt_rules.py, workflows/spike-*.yaml
+```
+
+Not built: `tests/esql/` fixtures (queries were checked in the lab instead), the Compose `agent` profile with Fleet, and the `install TARGET=…` naming (it's `make install TARGET=…`).
+
+### As planned
+
 ```
 ingest-lag-profiler/
 ├── README.md                         What it does, what it estimates, tested version and license, install
@@ -196,6 +268,12 @@ ingest-lag-profiler/
 ```
 
 ### File details
+
+*As built*, the main differences from these details are:
+- **Pipelines:** a data stream name that doesn't parse is kept with `lagprof.parse_error` rather than failing the document, so one odd name can't fail a run. Data view rules are marked unsupported. Remote patterns are dropped, and a rule is unsupported only if all its patterns are remote.
+- **Workflows:** one `_find` call per space with `per_page=10000` (no paging), and one `_bulk` request per write. A data check before the queries records `no_data` on a new cluster.
+- **Dashboard:** built with the Dashboards API from `build.py`, not an `.ndjson` saved objects export. Ten panels, listed in the design doc.
+- **Installer:** `check` doesn't check the Serverless project type or custom roles. Resources carry a fingerprint (version plus file hash), not just `_meta.lagprof_version`. Per-space installs get their own role, dashboard and alert rules.
 
 **`lagprof-rules-parse`** (Painless script processor)
 - Parse `interval` with `^(\d+)([smhd])$` into `rule.interval_s`.
@@ -275,10 +353,10 @@ Each milestone ends with something that works on its own. Milestone 0 comes firs
 ### Milestone 0: Lab and spikes (5 to 8 h)
 
 Tasks:
-- [ ] Write `scripts/lab/docker-compose.yml` for 9.5.6 on Rancher Desktop, with security on, TLS on Elasticsearch and a trial license. Add a first version of `generate-events.py`. Install the prebuilt rules and enable a realistic set, plus 3 custom `@timestamp` rules. Use 3 spaces.
+- [x] Write `scripts/lab/docker-compose.yml` for 9.5.6 on Rancher Desktop, with security on, TLS on Elasticsearch and a trial license. Add a first version of `generate-events.py`. Install the prebuilt rules and enable a realistic set, plus 3 custom `@timestamp` rules. Use 3 spaces. *As built:* 3 spaces (default, soc, empty) and lab rules from `tests/lab/seed_rules.py`; all 2,297 prebuilt rules were installed for the scale and coverage analysis.
 - [ ] Serverless and Cloud desk check: from the docs, find out whether Workflows, custom roles and the Kibana role, saved objects and alerting APIs are available on Serverless Security projects. If Workflows isn't available on Serverless, record Serverless as unsupported for now. The installer's `check` then reports that instead of failing partway.
-- [ ] Write `tests/model/simulate_rule_schedule.py`. Simulate a rule with interval I and look-back L, random arrival phase, and fixed lag d, with 100k trials per point. Check the formula's curve for (5m, 9m), (1m, 6m) and (1h, 1h5m). This is a cheap first check before the lab test, and it goes into `docs/miss-model.md`.
-- [ ] Workflow syntax spike: a throwaway workflow that tests each of these:
+- [x] Write `tests/model/simulate_rule_schedule.py`. Simulate a rule with interval I and look-back L, random arrival phase, and fixed lag d, with 100k trials per point. Check the formula's curve for (5m, 9m), (1m, 6m) and (1h, 1h5m). This is a cheap first check before the lab test, and it goes into `docs/miss-model.md`.
+- [x] Workflow syntax spike: a throwaway workflow that tests each of these: *As built:* answered in the design doc's "Questions answered in the lab"; spike files are in `tests/lab/workflows/`.
   - template syntax (`{{ }}` or `${{ }}`)
   - the run ID variable
   - `elasticsearch.request` to `/_query`, `/_resolve/index/a,b` and `/_bulk` with an NDJSON body
@@ -291,57 +369,57 @@ Tasks:
   - ES|QL `params` passed through `elasticsearch.request`
   - workflow-level failure handling (`settings.on-failure.fallback`) and the error variable
   - the maximum number of `foreach` iterations and the execution timeout
-- [ ] Rules API spike: check the `_find` paging limit and confirm the field names (`interval`, `from`, `index`, `data_view_id`, `timestamp_override`, `timestamp_override_fallback_disabled`). Record what share of enabled rules use `event.ingested`.
-- [ ] ES|QL spike:
+- [x] Rules API spike: check the `_find` paging limit and confirm the field names (`interval`, `from`, `index`, `data_view_id`, `timestamp_override`, `timestamp_override_fallback_disabled`). Record what share of enabled rules use `event.ingested`. *As built:* one page of up to 10,000 rules; 89% of prebuilt rules use `event.ingested`.
+- [x] ES|QL spike: *As built:* `tests/lab/spike_esql.py`. A multivalued key doesn't match, so pairs stay one document each.
   - Does `LOOKUP JOIN` produce one row per matching lookup document?
   - What happens when names collide?
   - Does `DATE_TRUNC` work in the window?
   - Is `INLINE STATS` available?
   - Does a multivalued `data_stream.dataset` in the lookup index match? If it does, stage 3 could write one document per rule instead of one per pair, which simplifies the workflow a lot.
-- [ ] Privileges spike: find the smallest working role for the workflow.
+- [x] Privileges spike: find the smallest working role for the workflow.
 
 **Done when:** every open question in the design has an answer written into `docs/design.md`. Part 1 changes are applied to the design. The workflow approach (bulk or single writes, one or more spaces, pair or multivalued lookup) is decided.
 
 ### Milestone 1: Lag measurement (5 to 7 h)
 
-- [ ] Write `stream-stats.esql` and `host-lag.esql`, with fixtures in `tests/esql/`.
-- [ ] Create index templates for `lagprof-stream-stats` and `lagprof-host-lag`.
-- [ ] Write the installer skeleton. It needs target files, Cloud ID decoding, target detection, `check`, and `install`/`status` for templates only. Test it against the Rancher Desktop lab, with unit tests in `tests/installer/`.
-- [ ] Run the queries by hand, write the results with a short script, and build the first two panels.
+- [x] Write `stream-stats.esql` and `host-lag.esql`, with fixtures in `tests/esql/`. *As built:* no `tests/esql/` fixtures; the queries were checked in the lab and against the validation.
+- [x] Create index templates for `lagprof-stream-stats` and `lagprof-host-lag`.
+- [x] Write the installer skeleton. It needs target files, Cloud ID decoding, target detection, `check`, and `install`/`status` for templates only. Test it against the Rancher Desktop lab, with unit tests in `tests/installer/`.
+- [x] Run the queries by hand, write the results with a short script, and build the first two panels.
 
 **Done when:** in the lab, adding 3 minutes of lag to one host makes that host top the slowest hosts panel, and its stream's p95 moves.
 **Content:** blog post 1, "How late are your logs?", with lag measurement only.
 
 ### Milestone 2: Rule inventory (9 to 14 h)
 
-- [ ] Write both ingest pipelines, with `_simulate` tests in `tests/pipelines/`.
-- [ ] Create templates for `lagprof-rules` and the `lagprof-rule-streams` lookup index.
-- [ ] Get stages 1 to 4 of **both** workflow versions running, fixing the sketches with what Milestone 0 found.
-- [ ] Test spaces in a lab with 3 spaces: rules in each, plus one space with no rules. Run the all-spaces version, then switch to per-space following the README. In per-space mode, check that one copy's stale delete leaves the other spaces' pairs alone. Check what happens with zero and with two copies set to `write_shared_stats: true`.
-- [ ] Add the rule coverage panel: supported, unsupported with reasons, and immune.
+- [x] Write both ingest pipelines, with `_simulate` tests in `tests/pipelines/`. *As built:* 19 cases in `tests/pipelines/fixtures.json`, including `lagprof-stamp`.
+- [x] Create templates for `lagprof-rules` and the `lagprof-rule-streams` lookup index.
+- [x] Get stages 1 to 4 of **both** workflow versions running, fixing the sketches with what Milestone 0 found.
+- [x] Test spaces in a lab with 3 spaces: rules in each, plus one space with no rules. Run the all-spaces version, then switch to per-space following the README. In per-space mode, check that one copy's stale delete leaves the other spaces' pairs alone. Check what happens with zero and with two copies set to `write_shared_stats: true`. *As built:* both versions ran with 3 spaces, and per-space stale cleanup stays in its own space. The installer now blocks a second shared-stats copy; the zero-copy case isn't recorded.
+- [x] Add the rule coverage panel: supported, unsupported with reasons, and immune.
 
 **Done when:** after one run, every enabled rule is in `lagprof-rules` with the right seconds values. Every pattern that matches a `logs-*` data stream gives pairs. Disabling a rule removes it from both indices on the next run. A forced failure in stage 3 deletes nothing.
 
 ### Milestone 3: Miss estimates and history (5 to 7 h)
 
-- [ ] Write `miss-rate.esql` with the Part 1 changes, plus fixtures with known lags and expected miss rates. Build these from the same numbers as the simulation.
-- [ ] Create templates for `lagprof-results` and `lagprof-runs`, with lifecycle retention.
-- [ ] Build workflow stages 5 and 6: positional row mapping, `_create` with deterministic IDs, and a run summary in both the success and failure paths.
-- [ ] Measure the query's runtime and memory in the Rancher Desktop lab. Scale `generate-events.py` up to the highest rate the lab can sustain (aim for 10 million or more events an hour), at 1, 5 and 20 rules per stream. Record the results with the lab's size, and describe how the cost grows rather than claiming production numbers. Repeat one measurement during the Cloud smoke test in Milestone 5.
+- [x] Write `miss-rate.esql` with the Part 1 changes, plus fixtures with known lags and expected miss rates. Build these from the same numbers as the simulation. *As built:* checked against the simulation's numbers on lab traffic (within 0.3 points) and by the Milestone 5 validation, not by a fixture file.
+- [x] Create templates for `lagprof-results` and `lagprof-runs`, with lifecycle retention.
+- [x] Build workflow stages 5 and 6: positional row mapping, `_create` with deterministic IDs, and a run summary in both the success and failure paths.
+- [x] Measure the query's runtime and memory in the Rancher Desktop lab. Scale `generate-events.py` up to the highest rate the lab can sustain (aim for 10 million or more events an hour), at 1, 5 and 20 rules per stream. Record the results with the lab's size, and describe how the cost grows rather than claiming production numbers. Repeat one measurement during the Cloud smoke test in Milestone 5. *As built:* `scripts/lab/cost_test.py`. Measured up to 3 million events an hour at 1, 20 and 50 rules per stream (design doc, "Cost"); memory wasn't recorded.
 
 **Done when:** hourly runs fill history for 24 hours without duplicates. Running the same hour again by hand changes nothing. The query runtime at the target volume is recorded.
 
 ### Milestone 4: Dashboard, alerts and full installer (6 to 9 h)
 
-- [ ] Build the remaining panels on ES|QL, with per-rule rollups and the 7-day recommendation.
-- [ ] Create both alerting rules and test each one: inject lag to make the miss-rate rule fire, and disable the workflow to make the stale rule fire.
-- [ ] Export the dashboard and rules to `kibana/`.
-- [ ] Finish the installer:
+- [x] Build the remaining panels on ES|QL, with per-rule rollups and the 7-day recommendation. *As built:* the recommendation uses the dashboard's time range, 7 days by default.
+- [x] Create both alerting rules and test each one: inject lag to make the miss-rate rule fire, and disable the workflow to make the stale rule fire. *As built:* the miss-rate rule fired on the lab's rules. The stale-profiler query was shown to flag stopped workflows, but the alert wasn't left to fire.
+- [x] Export the dashboard and rules to `kibana/`. *As built:* the dashboard is generated by `kibana/dashboards/build.py` for the Dashboards API.
+- [x] Finish the installer:
   - pipelines, role, both workflow modes, dashboard and alert rules
   - `uninstall`, and `status` with versions
   - the `--shared-stats` guard
   - the check that every target file loads with no per-target adjustments
-- [ ] Write the `targets/*.env.example` files and the README's install section for each target.
+- [x] Write the `targets/*.env.example` files and the README's install section for each target.
 
 **Done when:**
 - `make lab-reset && make lab-up` produces a working dashboard and alerts with no manual steps.
@@ -352,12 +430,12 @@ Tasks:
 
 The full validation runs in the Rancher Desktop lab. Keep the machine awake for the whole 3-hour run (for example with `caffeinate -i` on macOS). A paused cluster skips rule runs and creates misses for the wrong reason.
 
-- [ ] Write `setup-validation.sh`. It creates the test stream with a `final_pipeline` that sets `event.ingested`, plus two rules: one on `@timestamp` and one on `event.ingested`. Both run every 5 minutes, look back 9 minutes, have suppression off, and allow up to 1,000 alerts.
-- [ ] Write `send-lagged-events.py`. It interleaves the lag values, adds random jitter to send times so they land at random points in the rule's schedule, and gives each event a UUID.
-- [ ] Write `score-validation.py`. It matches each sent UUID to its alert (searching `.alerts-security*`, **verify** the pattern), computes the observed miss rate per lag with 95% intervals, and compares the profiler's estimate.
-- [ ] Run the further checks from the design: the ingest-time rule misses nothing, unmeasured events are counted, future-stamped events show as clock problems, the slow host shows up, and a disabled rule drops out.
-- [ ] Write `docs/validation-results.md` and the README, with the tested version, the license, the "estimates" wording, and what the estimate does and doesn't measure.
-- [ ] Installer smoke tests, time-boxed to about 1 hour each. On each target, run `check`, `install`, one workflow run (trigger it by hand), `status` and `uninstall`:
+- [x] Write `setup-validation.sh`. It creates the test stream with a `final_pipeline` that sets `event.ingested`, plus two rules: one on `@timestamp` and one on `event.ingested`. Both run every 5 minutes, look back 9 minutes, have suppression off, and allow up to 1,000 alerts. *As built:* `scripts/lab/validate.py setup`.
+- [x] Write `send-lagged-events.py`. It interleaves the lag values, adds random jitter to send times so they land at random points in the rule's schedule, and gives each event a UUID. *As built:* `validate.py send`. Events get IDs `<run>-<n>` rather than UUIDs.
+- [x] Write `score-validation.py`. It matches each sent UUID to its alert (searching `.alerts-security*`, **verify** the pattern), computes the observed miss rate per lag with 95% intervals, and compares the profiler's estimate. *As built:* `validate.py score`, against `.alerts-security.alerts-default`.
+- [x] Run the further checks from the design: the ingest-time rule misses nothing, unmeasured events are counted, future-stamped events show as clock problems, the slow host shows up, and a disabled rule drops out. *As built:* only the ingest-time rule check is automated. See the design doc's validation plan for the status of each check.
+- [x] Write `docs/validation-results.md` and the README, with the tested version, the license, the "estimates" wording, and what the estimate does and doesn't measure.
+- [ ] Installer smoke tests, time-boxed to about 1 hour each. On each target, run `check`, `install`, one workflow run (trigger it by hand), `status` and `uninstall`: *Status:* the self-managed path (TLS, CA certificate) is exercised by the lab; Cloud and Serverless are still to do.
   - **Self-managed:** the Rancher Desktop lab with an API key and CA certificate instead of the `elastic` user
   - **Elastic Cloud:** a hosted 9.5.6 trial deployment, plus one repeat of the query cost test
   - **Serverless:** a Security project trial, if the Milestone 0 desk check found Workflows available

@@ -2,7 +2,7 @@
   "_lagprof_notes": [
     "Created with POST /api/alerting/rule/lagprof-miss-rate. Keys starting with _lagprof are removed before sending.",
     "To change the threshold, edit the final WHERE (1.0 = 1%).",
-    "VERIFY in Milestone 0: the .es-query ES|QL params shape on 9.5."
+    "Confirmed on 9.5.6: Kibana accepts this .es-query ES|QL params shape (esqlQuery, timeField, timeWindowSize/Unit, threshold [0] with \">\")."
   ],
   "id": "lagprof-miss-rate",
   "name": "Ingest Lag Profiler: rule miss rate above 1%",
