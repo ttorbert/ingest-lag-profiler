@@ -287,7 +287,7 @@ The admin account used for installing needs the privileges below. A `superuser` 
 | A rule you expect is missing | Its index patterns must match `logs-*` data streams with `data_stream.dataset` and `namespace` in the events. Rules using a data view, ES\|QL rules and machine learning rules are listed under *Unsupported rules*. |
 | Run failed: `rule_bulk_write_failed_see_step_save_rules` | Writing the rule inventory failed, usually because an ingest pipeline is missing. Run `install` again. |
 | Run failed: `output exceeded the 10 MB size limit` | The workflow file's `max-step-size: 64mb` on `get_rules` is missing or was edited. 64 MB holds about 12,000 average rules, more than the 10,000 the step asks for. Install the pack's workflow again. |
-| *Rules seen* stops at 10,000 in a space | The workflow fetches one page of up to 10,000 enabled rules per space. Rules after that aren't profiled. This is a known limit of this version. |
+| *Unsupported rules* shows *more than 10,000 enabled rules in the space* | The workflow fetches one page of up to 10,000 enabled rules per space, so the rest aren't profiled. This is a known limit of this version. |
 | *Profiler health*: `no_data`, *No data in logs-\* yet* | Nothing has arrived in `logs-*` data streams. Normal on a new cluster. Results start in the first full clock hour after logs arrive. |
 | *Profiler health*: `no_data`, *none have event.ingested* | Logs arrive, but none carry `event.ingested`, so lag can't be measured. Add the final pipeline described in the `WARN data` row above. |
 | *Profiler health* shows nothing new | The workflow is disabled, or its owner's API key was deleted or expired. Repeat step 7. |

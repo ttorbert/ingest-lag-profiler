@@ -105,6 +105,8 @@ Rules the profiler can't estimate, and why:
 - rules that use a data view
 - rules whose index patterns only point at remote clusters
 
+One more row can appear here: *more than 10,000 enabled rules in the space*. The profiler reads up to 10,000 enabled rules per space, so the rest of that space's rules aren't profiled. It's a notice, not a rule, so *Rule coverage* doesn't count it.
+
 ### Profiler health
 
 For each workflow: the last run and its status, the number of runs, how many had no data or failed, and the rules seen. If *Last run* is more than an hour or two old, see [When the profiler stops](#when-the-profiler-stops).

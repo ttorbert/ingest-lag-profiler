@@ -549,13 +549,52 @@ def installed_version(client: Client, r: Resource, space: str | None) -> str | N
     return None
 
 
+# Indices whose documents carry lagprof.space.id. Stream stats and host lag come from
+# raw logs, which aren't divided by space, so a per-space dashboard shows them unfiltered.
+SPACE_SCOPED_INDICES = ("lagprof-results", "lagprof-rules", "lagprof-runs")
+
+
+def scope_query(esql: str, space: str) -> str:
+    """Add a space filter after the FROM line of a query on a space-scoped index."""
+    first, sep, rest = esql.partition("\n")
+    m = re.match(r"\s*FROM\s+(\S+)\s*$", first)
+    if not m or m.group(1) not in SPACE_SCOPED_INDICES:
+        return esql
+    return f'{first}\n| WHERE lagprof.space.id == "{space}"{sep}{rest}'
+
+
+def _scope_panels(obj, space: str):
+    if isinstance(obj, dict):
+        if obj.get("type") == "esql" and isinstance(obj.get("query"), str):
+            obj["query"] = scope_query(obj["query"], space)
+        for v in obj.values():
+            _scope_panels(v, space)
+    elif isinstance(obj, list):
+        for v in obj:
+            _scope_panels(v, space)
+
+
 def render_dashboard(path: str, marker: str, space: str | None = None) -> dict:
+    """Dashboard body. A per-space copy's panels only show that space's rules and runs."""
     body = load_json(path)
     ver, _, h = marker.partition("+")
     body["description"] = re.sub(r"pack v[^)]*\)", f"pack v{ver}, {h})", body.get("description", ""))
     if space:
         body["title"] = f"{body['title']} ({space})"
+        _scope_panels(body.get("panels", []), space)
     return body
+
+
+def marker_extra(r: "Resource", spaces: list[str], space: str | None) -> str:
+    """Extra input to a resource's fingerprint, for resources rendered differently per install.
+
+    The role depends on its spaces. A per-space dashboard is filtered to its space, so its
+    marker includes the space and older, unfiltered copies are updated on the next install."""
+    if r.kind == "role":
+        return ",".join(spaces)
+    if r.kind == "dashboard" and space:
+        return f"space={space}"
+    return ""
 
 
 def render_alert_rule(path: str, space: str | None = None) -> dict:
@@ -698,7 +737,7 @@ def install_one(client: Client, rep: Reporter, r: Resource, opts: InstallOptions
         return 0
 
     spaces = role_spaces(opts.workflow, opts.space)
-    marker = fingerprint(r.path, ",".join(spaces) if r.kind == "role" else "")
+    marker = fingerprint(r.path, marker_extra(r, spaces, space))
     current = installed_version(client, r, space)
     if current == marker and not opts.force:
         rep.line("unchanged", r.kind, r.name, f"v{VERSION}")
@@ -833,7 +872,7 @@ def status(client: Client, rep: Reporter, space: str | None = None) -> int:
             rep.line("error", r.kind, r.name, str(err))
             continue
         spaces = role_spaces("per-space" if space else "all-spaces", space)
-        marker = fingerprint(r.path, ",".join(spaces) if r.kind == "role" else "")
+        marker = fingerprint(r.path, marker_extra(r, spaces, space))
         if v is None:
             rep.line("missing", r.kind, r.name)
         elif v == marker:

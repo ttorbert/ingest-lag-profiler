@@ -68,7 +68,7 @@ The 10-second random delay above is therefore a pessimistic case. It would apply
 **The mechanism matches.** For every validation event, the lab predicted whether it would be caught from the rule's *actual* run start times. The rule: only the first run that starts after the event is searchable can catch it, and it does if the event's timestamp is within the look-back before that run started. In the full run, **all 2,963 judged predictions matched the real alerts** (149 of 149 in the smoke run). See [validation-results.md](validation-results.md).
 
 **Consequences:**
-- For 1-minute rules, the profiler's estimate is slightly low near the edge of the margin. The user guide says so; the dashboard note doesn't yet.
+- For 1-minute rules, the profiler's estimate is slightly low near the edge of the margin. The user guide and the dashboard note say so.
 - The recommended look-back already rounds the 99th percentile up to a whole minute, which absorbs a few seconds of delay.
 - The lab validation found small, steady delays, so the miss-rate query has no delay allowance. If a busy production Kibana shows large variation, a configurable allowance could be subtracted from the margin.
 

@@ -15,7 +15,7 @@
         "h": 4
       },
       "config": {
-        "content": "**Ingest Lag Profiler.** Estimated share of events each detection rule misses because logs arrive late. Results are **estimates**: `est_missed` counts events in the data streams a rule searches that fall outside its window, not missed alerts. Rules that search on `event.ingested` can't miss events because of lag; see *Rule coverage*. Updated hourly by the lagprof-hourly workflow."
+        "content": "**Ingest Lag Profiler.** Estimated share of events each detection rule misses because logs arrive late. Results are **estimates**: `est_missed` counts events in the data streams a rule searches that fall outside its window, not missed alerts. Rules that search on `event.ingested` can't miss events because of lag; see *Rule coverage*. For rules that run every minute, the estimate can be a few points low when rule start times vary on a busy Kibana. Updated hourly by the lagprof-hourly workflow."
       }
     },
     {
@@ -279,7 +279,7 @@
         "title": "Rule coverage",
         "data_source": {
           "type": "esql",
-          "query": "FROM lagprof-rules\n| EVAL coverage = CASE(lagprof.rule.supported == false, \"Unsupported\",\n                       lagprof.rule.timestamp_field == \"event.ingested\", \"Unaffected (event.ingested)\",\n                       \"Measured (@timestamp)\")\n| STATS rules = COUNT(*) BY coverage\n| SORT rules DESC"
+          "query": "FROM lagprof-rules\n| WHERE COALESCE(lagprof.rule.type, \"\") != \"lagprof_notice\"\n| EVAL coverage = CASE(lagprof.rule.supported == false, \"Unsupported\",\n                       lagprof.rule.timestamp_field == \"event.ingested\", \"Unaffected (event.ingested)\",\n                       \"Measured (@timestamp)\")\n| STATS rules = COUNT(*) BY coverage\n| SORT rules DESC"
         },
         "rows": [
           {

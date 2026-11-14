@@ -12,7 +12,7 @@ Detection rules belong to a Kibana space, and a rule search only returns rules f
 | Cluster cost per hour | Scans `logs-*` 3 times | Scans `logs-*` once per space, plus twice in the copy that writes shared stats |
 | If a run fails | No space gets new results that hour | Only that copy's space is affected |
 | Setup mistakes to watch for | Few | Exactly one copy must set `write_shared_stats: true`. If none do, the stream and host panels go empty. If several do, their duplicate rows are skipped, but each one repeats two `logs-*` scans. The installer refuses a second `--shared-stats` copy unless you add `--force`. |
-| Dashboard and alerts | One dashboard and two alert rules, in the Default space. Results carry `lagprof.space.id`, so you can filter by space. | Each copy gets its own: dashboard *Ingest Lag Profiler (<space>)*, and alert rules that cover only that space's rules and workflow |
+| Dashboard and alerts | One dashboard and two alert rules, in the Default space. Results carry `lagprof.space.id`, so you can filter by space. | Each copy gets its own dashboard, *Ingest Lag Profiler (<space>)*, and alert rules, both covering only that space's rules and workflow. Stream and host panels are shared. |
 | Role | `lagprof-workflow` | One per copy: `lagprof-workflow-<space>` |
 
 ## Which to pick
@@ -30,7 +30,7 @@ Either way, the raw logs (`logs-*`) aren't divided by space. Rules in every spac
 1. Create the workflow role with Security rule read privileges in all spaces (`spaces: ["*"]`). See `elasticsearch/security/lagprof-workflow-role.json`.
 2. Import `lagprof-hourly-all-spaces.yaml` in the Default space.
 
-Each run fetches up to 10,000 enabled rules per space in one call. Rules after that aren't profiled.
+Each run fetches up to 10,000 enabled rules per space in one call. Rules after that aren't profiled, and the dashboard's *Unsupported rules* panel shows a notice for that space.
 
 ## Installing the per-space version
 

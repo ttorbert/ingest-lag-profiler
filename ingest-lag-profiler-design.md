@@ -193,7 +193,7 @@ Raw logs aren't divided by space, so stream stats and host lag are the same for 
 
 Both versions run the same stages:
 
-1. **Collect rules.** `kibana.request` calls the rules find API for enabled rules, with `per_page=10000` and one page only. That step sets `max-step-size: 64mb`, because the default 10 MB output limit fails at about 2,300 rules. The all-spaces version first lists the spaces and repeats this for each one, using `/s/<space>/` paths. A space with more than 10,000 enabled rules would be cut off at 10,000 (see [Still open](#still-open)).
+1. **Collect rules.** `kibana.request` calls the rules find API for enabled rules, with `per_page=10000` and one page only. That step sets `max-step-size: 64mb`, because the default 10 MB output limit fails at about 2,300 rules. The all-spaces version first lists the spaces and repeats this for each one, using `/s/<space>/` paths. A space with more than 10,000 enabled rules is cut off at 10,000. When the find response's `total` is over 10,000, the run writes a notice document to `lagprof-rules` (`lagprof.rule.type: lagprof_notice`, unsupported, with the count in its name), which shows in the *Unsupported rules* panel. It carries the run ID, so stale cleanup removes it once the space is back under the cap. Run counts and *Rule coverage* leave it out.
 2. **Save rule settings.** One bulk request per space writes the rules to `lagprof-rules` through `lagprof-rules-parse`, with `refresh=wait_for`. An `if` step then checks the bulk response's `errors` flag and, if it's set, calls a path that doesn't exist on purpose, so the run fails and the fallback records why. Only the rules the pipeline marked supported are read back.
 3. **Expand index patterns.** For each supported rule, one `_resolve/index` call covers all its local patterns. Only the `data_streams` part of the response is used, so backing `.ds-` indices, aliases and plain indices are ignored. One bulk request per rule writes a pair for each data stream to `lagprof-rule-streams`, with the same error check as stage 2. The index is then refreshed so the query can see the new pairs. Missing indices in a rule's patterns are ignored.
 4. **Remove stale documents.** A delete-by-query removes documents from earlier runs from both rule indices, which drops disabled and deleted rules. In per-space mode, it only touches its own space. This stage only runs if stages 1 to 3 succeeded. A partial run never deletes good pairs.
@@ -355,7 +355,7 @@ The dashboard answers one question first: which rules are missing events right n
 | Unsupported rules | Unsupported rules counted by reason | `lagprof-rules` |
 | Profiler health | Per workflow: last run, last status and note, runs, `no_data` and failed counts, rules seen | `lagprof-runs` |
 
-Differences from the original plan: the clock problems panel shows hosts only (stream-level `negative_lag_events` is stored but not charted); measurement gaps doesn't list the rules that search each stream; and miss rate over time shows every rule rather than the top 10. Results carry `lagprof.space.id`, so the dashboard can be filtered by space. A per-space install gets its own copy titled *Ingest Lag Profiler (<space>)*, but its queries aren't limited to that space.
+Differences from the original plan: the clock problems panel shows hosts only (stream-level `negative_lag_events` is stored but not charted); measurement gaps doesn't list the rules that search each stream; and miss rate over time shows every rule rather than the top 10. Results carry `lagprof.space.id`, so the dashboard can be filtered by space. A per-space install gets its own copy titled *Ingest Lag Profiler (<space>)*. The installer adds `WHERE lagprof.space.id == "<space>"` to its panels on `lagprof-results`, `lagprof-rules` and `lagprof-runs`. Panels on stream stats and host lag stay unfiltered, because raw logs aren't divided by space.
 
 **Alerts.** Two Kibana alerting rules, both using ES|QL, watch the results:
 
@@ -414,7 +414,7 @@ Rules the installer follows:
 - **Works before the first run.** The rule indices and the four data streams are created empty, because ES|QL reports "Unknown index" for a missing one and every panel would show an error.
 - **Keeps existing indices in step.** When the component template changes, its fields are added to existing `lagprof-*` indices (except the lookup index), because templates only shape new backing indices. The lookup index is deleted and recreated if its mapping has fields the template doesn't; every run rebuilds it.
 - **One version at a time.** `install` refuses a per-space copy while the all-spaces workflow is installed, and the other way round. It refuses a second `--shared-stats` copy. `--force` overrides both.
-- **Per-space installs are scoped.** Each per-space copy gets its own role (`lagprof-workflow-<space>`), dashboard (`lagprof-overview-<space>`) and alert rules (`lagprof-miss-rate-<space>` and so on), because Kibana dashboard and rule IDs are unique across spaces. Its alert queries get a `WHERE lagprof.space.id == "<space>"` line. Templates, pipelines and indices are shared by every copy.
+- **Per-space installs are scoped.** Each per-space copy gets its own role (`lagprof-workflow-<space>`), dashboard (`lagprof-overview-<space>`) and alert rules (`lagprof-miss-rate-<space>` and so on), because Kibana dashboard and rule IDs are unique across spaces. Its alert queries, and its dashboard panels on space-scoped indices, get a `WHERE lagprof.space.id == "<space>"` line. The dashboard's fingerprint includes the space, so copies installed before that filter existed are updated on the next `install`. Templates, pipelines and indices are shared by every copy.
 - **Workflows are matched by name.** Kibana doesn't reuse a deleted workflow's ID, so the installer looks a workflow up by its `name`. With `LAGPROF_WORKFLOW_API_KEY` set, it creates or updates the workflow with that key, so the dedicated user becomes the owner of scheduled runs.
 
 ## Requirements
@@ -605,7 +605,7 @@ The first release takes about 37 to 56 hours across six milestones. That's more 
 - [ ] Workflows availability, custom roles and API differences on Serverless.
 - [ ] Query time on a multi-node production-size cluster: tens of millions of events an hour. The lab measured up to 3 million.
 - [ ] The `foreach` iteration limit and the workflow timeout at large rule counts. 2,295 rules (7,360 step executions) didn't hit a limit.
-- [ ] **More than 10,000 enabled rules in one space.** The find call asks for one page of 10,000, so rules after that are silently left out. Paging, or a check that warns when `total` is larger, is needed before very large deployments.
+- [ ] **More than 10,000 enabled rules in one space.** The find call asks for one page of 10,000, so rules after that are left out. Since Nov 14, 2026 the run records a notice that shows on the dashboard; paging would remove the limit.
 - [ ] The Elastic subscriptions page link for the Workflows license tier.
 
 ### Known issues
@@ -614,10 +614,12 @@ Found in the Nov 14, 2026 code review.
 
 - **Fixed Nov 14, 2026: uninstalling one per-space copy broke the others.** `uninstall --space <id>` used to remove the shared ingest pipelines, so the remaining copies' runs failed, and their failure summaries failed too because `lagprof-stamp` was gone. `--delete-data` also deleted every space's history. Now, while other profiler workflows are installed, `uninstall` keeps the shared resources, and `--delete-data` deletes only that space's documents with a delete-by-query on `lagprof.space.id`.
 
+- **Fixed Nov 14, 2026: the per-space dashboard wasn't filtered to its space.** Now its panels on results, rules and runs are.
+- **Fixed Nov 14, 2026: the dashboard note didn't mention 1-minute rules.** It now says their estimate can be a few points low.
+
 Not fixed yet:
 
-- **The per-space dashboard isn't filtered to its space.** Each copy's panels show every space's results. The alert rules are filtered.
-- **1-minute rules:** the [miss model](docs/miss-model.md) says their estimate can be slightly low near the edge of the margin. The user guide says so; the dashboard note doesn't.
+- **Overlapping runs empty the rule inventory.** Each run's stale cleanup deletes rule and pair documents from every other run. If two runs of the same workflow overlap, for example a manual run started during a scheduled one, each deletes the other's documents, and both record `success` with few or no rules and no results. Found in the lab on Nov 14, 2026. The next normal run recovers. A fix would be to delete only documents older than this run's start, or to skip a run while another is in progress.
 
 ## Notes for reviewers
 
@@ -651,7 +653,7 @@ Not fixed yet:
 
 | Command | What it runs | Needs |
 | --- | --- | --- |
-| `make test` | `lint`, 47 installer unit tests against a fake cluster, a 20,000-trial formula simulation | Nothing |
+| `make test` | `lint`, 51 installer unit tests against a fake cluster, a 20,000-trial formula simulation | Nothing |
 | `make simulate` | The full 100,000-trial simulation, as Markdown | Nothing |
 | `make test-pipelines` | 19 `_simulate` fixture cases for the three pipelines | The lab |
 | `make dashboard` | Every dashboard query, then rebuilds the JSON | The lab |

@@ -37,7 +37,7 @@ Every `lagprof-*` index except the lookup index shares one component template, [
 | `lagprof.rule.id` | keyword | Rule saved-object ID |
 | `lagprof.rule.rule_id` | keyword | Rule's stable `rule_id` |
 | `lagprof.rule.name` | keyword | Rule name |
-| `lagprof.rule.type` | keyword | `query`, `eql`, `threshold`, `new_terms`, `threat_match`, `esql`, `machine_learning`, … |
+| `lagprof.rule.type` | keyword | `query`, `eql`, `threshold`, `new_terms`, `threat_match`, `esql`, `machine_learning`, … `lagprof_notice` marks the notice written when a space has more than 10,000 enabled rules (ID `__lagprof_rule_cap_<space>`); it isn't a rule. |
 | `lagprof.rule.interval_raw`, `from_raw` | keyword | Schedule as written, for example `5m` and `now-9m` |
 | `lagprof.rule.interval_s`, `lookback_s` | long | Schedule in seconds |
 | `lagprof.rule.index_patterns` | keyword | All patterns, as written |
@@ -100,6 +100,6 @@ The fields are `host.name`, `events`, `lag_p95_s`, `lag_max_s` and `negative_lag
 | `lagprof.mode` | keyword | `all-spaces` or `per-space` |
 | `lagprof.wrote_shared_stats` | boolean | Per-space copies: whether this copy writes stream stats and host lag |
 | `spaces_with_rules` | long | All-spaces runs: spaces that had enabled rules |
-| `rules_seen`, `rules_supported` | long | Enabled rules, and how many are supported |
+| `rules_seen`, `rules_supported` | long | Enabled rules, and how many are supported (rule cap notices aren't counted) |
 | `streams_matched` | long | Rule and data stream pairs |
 | `result_rows` | long | Rows the miss-rate query returned |

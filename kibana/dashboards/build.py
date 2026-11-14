@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Build kibana/dashboards/lagprof-overview.json, the Ingest Lag Profiler dashboard.
 
+The workflow writes a notice document to lagprof-rules (lagprof.rule.type
+"lagprof_notice") when a space has more than 10,000 enabled rules. It shows in
+Unsupported rules, and Rule coverage leaves it out of the counts.
+
 The JSON is a Kibana Dashboards API body (PUT /api/dashboards/lagprof-overview, 9.5+).
 Every panel reads the lagprof-* indices with ES|QL, never raw logs.
 
@@ -25,6 +29,7 @@ OUT = HERE / "lagprof-overview.json"
 INTRO = """**Ingest Lag Profiler.** Estimated share of events each detection rule misses because logs arrive late. \
 Results are **estimates**: `est_missed` counts events in the data streams a rule searches that fall outside its \
 window, not missed alerts. Rules that search on `event.ingested` can't miss events because of lag; see *Rule coverage*. \
+For rules that run every minute, the estimate can be a few points low when rule start times vary on a busy Kibana. \
 Updated hourly by the lagprof-hourly workflow."""
 
 Q = {
@@ -83,6 +88,7 @@ Q = {
 | LIMIT 100""",
 
     "rule_coverage": """FROM lagprof-rules
+| WHERE COALESCE(lagprof.rule.type, "") != "lagprof_notice"
 | EVAL coverage = CASE(lagprof.rule.supported == false, "Unsupported",
                        lagprof.rule.timestamp_field == "event.ingested", "Unaffected (event.ingested)",
                        "Measured (@timestamp)")

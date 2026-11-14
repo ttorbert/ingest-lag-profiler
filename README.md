@@ -97,7 +97,7 @@ make lab-down      # stop (keeps data); make lab-reset deletes everything
 ## Development
 
 ```bash
-make test             # lint, 47 installer unit tests, quick formula simulation (no cluster needed)
+make test             # lint, 51 installer unit tests, quick formula simulation (no cluster needed)
 make simulate         # full formula simulation
 make test-pipelines   # ingest pipeline fixtures against the lab
 make dashboard        # run the dashboard queries against the lab, then rebuild its JSON

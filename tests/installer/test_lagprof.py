@@ -236,6 +236,13 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(es, "https://abc123.us-east-1.aws.found.io")
         self.assertEqual(kb, "https://def456.us-east-1.aws.found.io")
 
+    def test_scope_query_adds_space_filter_after_from(self):
+        q = "FROM lagprof-results\n| STATS n = COUNT(*)"
+        self.assertEqual(lagprof.scope_query(q, "soc"),
+                         'FROM lagprof-results\n| WHERE lagprof.space.id == "soc"\n| STATS n = COUNT(*)')
+        shared = "FROM lagprof-host-lag\n| STATS n = COUNT(*)"
+        self.assertEqual(lagprof.scope_query(shared, "soc"), shared)
+
     def test_cloud_id_with_port(self):
         encoded = base64.b64encode(b"example.com:9243$es$kb").decode()
         es, kb = lagprof.decode_cloud_id(f"x:{encoded}")
@@ -460,6 +467,45 @@ class InstallTests(FakeServerCase):
         # Once soc's copy is removed, team-b may take over, whatever the run history says.
         lagprof.uninstall(self.client, self.rep, False, "soc")
         self.assertEqual(lagprof.install(self.client, self.rep, team_b), 0, self.out.getvalue())
+
+    def _dashboard_queries(self, key):
+        found = []
+        def walk(o):
+            if isinstance(o, dict):
+                if o.get("type") == "esql":
+                    found.append(o["query"])
+                for v in o.values():
+                    walk(v)
+            elif isinstance(o, list):
+                for v in o:
+                    walk(v)
+        walk(self.fake.store[key])
+        return found
+
+    def test_per_space_dashboard_is_filtered_to_its_space(self):
+        opts = lagprof.InstallOptions(workflow="per-space", space="soc", shared_stats=True)
+        self.assertEqual(lagprof.install(self.client, self.rep, opts), 0, self.out.getvalue())
+        queries = self._dashboard_queries("/api/dashboards/lagprof-overview-soc")
+        self.assertEqual(len(queries), 9)
+        for q in queries:
+            index = q.split("\n", 1)[0].split()[1]
+            scoped = '| WHERE lagprof.space.id == "soc"' in q
+            # Stream stats and host lag aren't divided by space.
+            self.assertEqual(scoped, index in lagprof.SPACE_SCOPED_INDICES, q)
+        # The marker includes the space, so status agrees with what install wrote.
+        self.rep.lines.clear()
+        lagprof.status(self.client, self.rep, "soc")
+        self.assertIn(("current", "dashboard", "lagprof-overview-soc"), self.statuses())
+
+    def test_all_spaces_dashboard_is_not_filtered(self):
+        lagprof.install(self.client, self.rep, lagprof.InstallOptions())
+        for q in self._dashboard_queries("/api/dashboards/lagprof-overview"):
+            self.assertNotIn("lagprof.space.id ==", q)
+
+    def test_install_two_copies(self):
+        self._install_two_copies()
+        self.assertIn("/api/dashboards/lagprof-overview-default", self.fake.store)
+        self.assertIn("/api/dashboards/lagprof-overview-soc", self.fake.store)
 
     def _install_two_copies(self):
         for space, shared in (("default", True), ("soc", False)):

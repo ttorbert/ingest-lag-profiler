@@ -46,7 +46,7 @@ The lab runs on Rancher Desktop with Elasticsearch and Kibana 9.5.6. `make lab-u
 - **Installer:**
   - `check`, `install`, `status`, `uninstall`, `lint` and `render-workflow`, with workflow import through the API.
   - Running `install` again reports everything `unchanged`.
-  - 30 unit tests against a fake cluster at the time; 47 now.
+  - 30 unit tests against a fake cluster at the time; 51 now.
 - **Alert rules:** both are installed, and Kibana accepted their ES|QL settings. They haven't been made to fire yet.
 
 **Changes from the plan, found in the lab:**
@@ -86,12 +86,13 @@ The lab runs on Rancher Desktop with Elasticsearch and Kibana 9.5.6. `make lab-u
 - **Per-space installs** into more than one space: each copy now gets its own role, dashboard and alert rules (Kibana IDs are unique across spaces). The installer refuses to mix the two workflow versions.
 - **Lab workflow runner:** finds workflows by name, not ID.
 - **Per-space `uninstall` fixed** (Nov 14, 2026, after the code review): while other profiler workflows are installed, it keeps the shared templates, pipelines, indices and data streams, and `--delete-data` deletes only that space's documents. Four unit tests cover it.
+- **Small fixes** (Nov 14, 2026): per-space dashboards are filtered to their space; the dashboard note mentions 1-minute rules; a space over the 10,000-rule cap records a notice shown in *Unsupported rules*. All three checked in the lab. Four more unit tests.
 
 **Next:**
-1. Fix the remaining [known issues](ingest-lag-profiler-design.md#known-issues): the per-space dashboard filter and the 1-minute rule note.
+1. Fix the remaining [known issue](ingest-lag-profiler-design.md#known-issues): overlapping runs empty the rule inventory.
 2. Run the installer smoke tests on Elastic Cloud and Serverless. They need accounts.
 3. Measure query time on a production-size cluster. The lab measured up to 3 million events an hour, at about 1 second per million.
-4. Page the rules find call, or warn, for spaces with more than 10,000 enabled rules.
+4. Page the rules find call for spaces with more than 10,000 enabled rules. Low priority: such spaces now show a notice on the dashboard.
 5. Tag `v0.1.0` and attach the `make package` zip.
 6. ES|QL rule support, low priority: 348 of 354 prebuilt ES|QL rules search on `event.ingested`, so it matters only for custom ES|QL rules.
 
@@ -199,7 +200,7 @@ ingest-lag-profiler/
 ├── targets/                          As planned below
 └── tests/
     ├── model/simulate_rule_schedule.py
-    ├── installer/test_lagprof.py     47 unit tests against a fake cluster
+    ├── installer/test_lagprof.py     51 unit tests against a fake cluster
     ├── pipelines/                    fixtures.json (19 cases) and run_simulate.py
     └── lab/                          Spikes and helpers run by hand: spike_esql.py, seed_rules.py,
                                       run_workflow.py, analyze_prebuilt_rules.py, workflows/spike-*.yaml
