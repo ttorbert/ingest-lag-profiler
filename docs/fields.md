@@ -94,7 +94,8 @@ The fields are `host.name`, `events`, `lag_p95_s`, `lag_max_s` and `negative_lag
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `status` | keyword | `success` or `failed` |
+| `status` | keyword | `success`; `no_data` (the run worked but had nothing to measure: no logs in `logs-*` yet, or none with `event.ingested`); or `failed` |
+| `reason` | keyword | For `no_data` runs, which of the two it was, in plain words |
 | `error` | match_only_text | Error message for failed runs |
 | `lagprof.mode` | keyword | `all-spaces` or `per-space` |
 | `lagprof.wrote_shared_stats` | boolean | Per-space copies: whether this copy writes stream stats and host lag |

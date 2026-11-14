@@ -107,7 +107,13 @@ Rules the profiler can't estimate, and why:
 
 ### Profiler health
 
-The last run, the number of runs and failures, and the rules seen, for each workflow. If *Last run* is more than an hour or two old, see [When the profiler stops](#when-the-profiler-stops).
+For each workflow: the last run and its status, the number of runs, how many had no data or failed, and the rules seen. If *Last run* is more than an hour or two old, see [When the profiler stops](#when-the-profiler-stops).
+
+| Last status | Meaning |
+| --- | --- |
+| `success` | Measured the previous clock hour |
+| `no_data` | Worked, but had nothing to measure. *Note* says why: **no data in `logs-*` yet** (normal on a new cluster; results start in the first full hour after logs arrive), or **logs found, but none have `event.ingested`** (lag can't be measured until it's set; see the [setup guide](setup-guide.md#troubleshooting)) |
+| `failed` | Something went wrong. The `error` field in `lagprof-runs` says what |
 
 ---
 
@@ -148,7 +154,7 @@ Elastic Agent integrations set `event.ingested`. Other ingest paths, such as cus
 | Alert | Fires when | Respond by |
 | --- | --- | --- |
 | **Rule miss rate above 1%** | Any rule's estimate in the latest hour is above 1% (checked every 15 minutes) | Open *Rules at risk*, find the cause on the lag and host panels, and pick a fix from the table above |
-| **No successful run in 3 hours** | A profiler workflow has stopped succeeding (checked every 30 minutes) | See [When the profiler stops](#when-the-profiler-stops) |
+| **No completed run in 3 hours** | A profiler workflow has stopped completing: no `success` or `no_data` run (checked every 30 minutes) | See [When the profiler stops](#when-the-profiler-stops) |
 
 The setup guide covers [sending alerts](setup-guide.md#9-send-alerts-somewhere) and changing the threshold.
 

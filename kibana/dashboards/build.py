@@ -95,13 +95,18 @@ Q = {
 | SORT rules DESC""",
 
     "health": """FROM lagprof-runs
-| EVAL workflow = COALESCE(lagprof.space.id, "all spaces"),
-       ok = CASE(status == "success", 1, 0)
-| STATS last_run = MAX(@timestamp), runs = COUNT(*), succeeded = SUM(ok),
+| EVAL workflow = COALESCE(lagprof.space.id, "all spaces")
+| INLINE STATS latest = MAX(@timestamp) BY workflow
+| EVAL is_last = @timestamp == latest
+| STATS last_run = MAX(@timestamp), runs = COUNT(*),
+        no_data = SUM(CASE(status == "no_data", 1, 0)),
+        failed = SUM(CASE(status == "failed", 1, 0)),
+        last_status = MAX(CASE(is_last, status, null)),
+        last_note = MAX(CASE(is_last, reason, null)),
         last_rules_seen = MAX(rules_seen)
      BY workflow
-| EVAL failed = runs - succeeded
-| KEEP workflow, last_run, runs, failed, last_rules_seen""",
+| EVAL last_note = CASE(last_status == "failed", "See the error field in lagprof-runs", last_note)
+| KEEP workflow, last_run, last_status, last_note, runs, no_data, failed, last_rules_seen""",
 }
 
 
@@ -118,6 +123,7 @@ LABELS = {
     "events_in_future": "Events stamped in the future", "last_seen": "Last seen", "unmeasured": "No event.ingested",
     "unmeasured_pct": "No event.ingested (%)", "coverage": "Coverage", "rules": "Rules", "reason": "Reason",
     "workflow": "Workflow", "last_run": "Last run", "runs": "Runs", "failed": "Failed",
+    "last_status": "Last status", "last_note": "Note", "no_data": "No data",
     "last_rules_seen": "Rules seen", "hour": "Hour",
 }
 
@@ -177,8 +183,12 @@ def build(version: str) -> dict:
               "Lag can't be measured for these events. Rules on event.ingested fall back to @timestamp for them."),
         table("Rule coverage", Q["rule_coverage"], ["coverage"], ["rules"], g(24, 44, 12, 12)),
         table("Unsupported rules", Q["unsupported_rules"], ["reason"], ["rules"], g(36, 44, 12, 12)),
-        table("Profiler health", Q["health"], ["workflow"], ["last_run", "runs", "failed", "last_rules_seen"],
-              g(0, 56, 48, 8)),
+        table("Profiler health", Q["health"], ["workflow"],
+              ["last_run", "last_status", "last_note", "runs", "no_data", "failed", "last_rules_seen"],
+              g(0, 56, 48, 8),
+              "No data means the run worked but had nothing to measure: no logs in logs-* yet, or none with "
+              "event.ingested. Note says which.",
+              widths={"last_run": 220, "last_note": 520}),
     ]
     return {
         "title": "Ingest Lag Profiler",

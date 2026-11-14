@@ -477,6 +477,12 @@ def pack_resources() -> list[Resource]:
     # Created up front so the miss-rate query and dashboard work before the first run.
     res.append(Resource("index", "lagprof-rules"))
     res.append(Resource("index", "lagprof-rule-streams"))
+    # Data streams are otherwise created by the first write. Until then ES|QL reports
+    # "Unknown index", so every dashboard panel would show an error on a new install.
+    for p in sorted((PACK_ROOT / "elasticsearch/index-templates").glob("*.json")):
+        body = load_json(p.relative_to(PACK_ROOT))
+        if "data_stream" in body:
+            res.append(Resource("data_stream", body["index_patterns"][0]))
     res.append(Resource("role", ROLE_NAME, "elasticsearch/security/lagprof-workflow-role.json"))
     res.append(Resource("workflow", "lagprof-hourly"))
     res.append(Resource("dashboard", "lagprof-overview", "kibana/dashboards/lagprof-overview.json"))
@@ -605,6 +611,14 @@ def install_one(client: Client, rep: Reporter, r: Resource, opts: InstallOptions
                 return 0
         rep.line("unchanged", r.kind, r.name, "exists")
         return 0
+    if r.kind == "data_stream":
+        code, _ = client.es("GET", f"/_data_stream/{r.name}", allow=(404,))
+        if code == 404:
+            client.es("PUT", f"/_data_stream/{r.name}")
+            rep.line("created", r.kind, r.name, "empty, so dashboard panels work before the first run")
+        else:
+            rep.line("unchanged", r.kind, r.name, "exists")
+        return 0
     if r.kind == "dashboard" and not (PACK_ROOT / (r.path or "")).exists():
         rep.line("skipped", r.kind, r.name, "run kibana/dashboards/build.py first")
         return 0
@@ -619,6 +633,8 @@ def install_one(client: Client, rep: Reporter, r: Resource, opts: InstallOptions
 
     if r.kind in ES_PATHS:
         client.es("PUT", ES_PATHS[r.kind] + r.name, with_meta(load_json(r.path), marker))
+        if r.kind == "component_template":
+            sync_existing_mappings(client, rep, r)
     elif r.kind == "dashboard":
         # Dashboards API (9.5+): PUT creates with this ID or replaces it.
         client.kb("PUT", f"{space_prefix(space)}/api/dashboards/{r.name}", render_dashboard(r.path, marker))
@@ -640,6 +656,23 @@ def install_one(client: Client, rep: Reporter, r: Resource, opts: InstallOptions
         was = " (content changed)" if marker_version(current) == VERSION else f" (was v{marker_version(current)})"
     rep.line(verb, r.kind, r.name, f"v{VERSION}{was}")
     return 0
+
+
+def sync_existing_mappings(client: Client, rep: Reporter, r: Resource) -> None:
+    """Add the component template's fields to lagprof-* indices that already exist.
+
+    Templates only shape new backing indices, and ES|QL rejects a column that no index
+    maps, so a dashboard panel reading a field added in a pack update would fail until
+    the next rollover. Adding fields is always allowed. The lookup index keeps its own
+    mapping: every field in it enters the join.
+    """
+    props = ((load_json(r.path).get("template") or {}).get("mappings") or {}).get("properties")
+    if not props:
+        return
+    path = f"/lagprof-*,-{LOOKUP_INDEX}/_mapping?allow_no_indices=true&expand_wildcards=open,hidden"
+    code, out = client.es("PUT", path, {"properties": props}, allow=(400,))
+    if code == 400:
+        rep.line("WARN", "mapping", "lagprof-*", f"could not add new fields to existing indices: {out}")
 
 
 def workflow_id(text: str) -> str:
@@ -713,8 +746,9 @@ def status(client: Client, rep: Reporter, space: str | None = None) -> int:
             rep.line("present" if names else "missing", r.kind, ", ".join(names) or r.name,
                      "in this space" if names else "")
             continue
-        if r.kind == "index":
-            code, _ = client.es("GET", f"/{r.name}", allow=(404,))
+        if r.kind in ("index", "data_stream"):
+            path = f"/_data_stream/{r.name}" if r.kind == "data_stream" else f"/{r.name}"
+            code, _ = client.es("GET", path, allow=(404,))
             rep.line("missing" if code == 404 else "present", r.kind, r.name)
             continue
         try:
@@ -761,7 +795,7 @@ def uninstall(client: Client, rep: Reporter, delete_data: bool, space: str | Non
             elif r.kind == "dashboard":
                 code, _ = client.kb("DELETE", f"{space_prefix(space)}/api/dashboards/{r.name}", allow=(404,))
                 rep.line("absent" if code == 404 else "deleted", r.kind, r.name)
-            elif r.kind == "index":
+            elif r.kind in ("index", "data_stream"):
                 if not delete_data:
                     rep.line("kept", r.kind, r.name, "data (use --delete-data)")
             elif r.kind == "workflow":

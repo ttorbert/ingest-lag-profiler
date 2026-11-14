@@ -335,7 +335,7 @@ The dashboard can be filtered by space. A note on the dashboard explains what th
 **Alerts.** Two Kibana alerting rules, both using ES|QL, watch the results:
 
 - **Miss rate:** alerts when any rule's estimated miss rate in the latest hour goes above 1%. The rate is rolled up per rule across its data streams. The threshold is one value in the query and easy to change.
-- **Stale profiler:** alerts when `lagprof-runs` has no successful run in the last 3 hours, so a broken workflow can't go unnoticed. In per-space mode, it checks each space.
+- **Stale profiler:** alerts when `lagprof-runs` has no completed run (`success` or `no_data`) in the last 3 hours, so a broken workflow can't go unnoticed. In per-space mode, it checks each space.
 
 The history in `lagprof-results` is the preserved report. Exported reports from the dashboard are optional, and I didn't confirm which licenses include scheduled PDF reporting.
 

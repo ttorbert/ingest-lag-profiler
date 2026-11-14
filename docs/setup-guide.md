@@ -167,13 +167,14 @@ The installer runs `check` first, then installs these in order:
 
 | Resource | What it is |
 | --- | --- |
-| Index templates (7) and component template | Mappings and retention for the `lagprof-*` indices |
+| Index templates (6) and component template | Mappings and retention for the `lagprof-*` indices |
 | Ingest pipelines (3) | Parse rule schedules and data stream names |
 | `lagprof-rules`, `lagprof-rule-streams` | Rule inventory, and the lookup index the main query joins |
+| Data streams (4): `lagprof-results`, `lagprof-stream-stats`, `lagprof-host-lag`, `lagprof-runs` | Created empty, so the dashboard shows empty panels rather than errors before the first run |
 | Role `lagprof-workflow` | The permissions the workflow runs with |
-| Workflow `lagprof-hourly-…` | Runs every hour; **its first run starts immediately** |
+| Workflow `lagprof-hourly-…` | Runs every hour; **its first run starts immediately**. With no logs yet, that run records `no_data` instead of failing |
 | Dashboard *Ingest Lag Profiler* | Ten panels; see the [user guide](user-guide.md) |
-| Alert rules (2) | Miss rate above 1%; no successful run in 3 hours |
+| Alert rules (2) | Miss rate above 1%; no completed run in 3 hours |
 
 Running `install` again is safe. It updates only what has changed and reports `unchanged` for the rest.
 
@@ -224,7 +225,7 @@ To limit them to the `lagprof-workflow` role:
 1. **Status:** `python3 scripts/lagprof.py status --target-file targets/prod.env` should list every resource as `current` or `present`.
 2. **Workflow:** in Kibana, open **Workflows › lagprof-hourly-all-spaces › Executions**. The first run should be *completed*, usually within a minute, or a few minutes with thousands of rules.
 3. **Dashboard:** open **Dashboards › Ingest Lag Profiler**.
-   - *Profiler health* shows the run.
+   - *Profiler health* shows the run. On a new cluster with no logs yet, its status is **no_data** with the note *No data in logs-\* yet*. That's expected: it isn't a failure.
    - *Rule coverage* shows your rules.
    - *Rules at risk* and the lag panels fill in from the **previous full clock hour**. If logs were flowing then, they show data straight away. If not, they fill in after the next hourly run.
 
@@ -235,7 +236,7 @@ The [user guide](user-guide.md) explains how to read the results.
 The two alert rules are installed **without notifications**. To get them by email, Slack or another channel:
 
 1. Open **Stack Management › Rules**.
-2. Edit **Ingest Lag Profiler: rule miss rate above 1%** and **Ingest Lag Profiler: no successful run in 3 hours**.
+2. Edit **Ingest Lag Profiler: rule miss rate above 1%** and **Ingest Lag Profiler: no completed run in 3 hours**.
 3. Under **Actions**, add a connector.
 
 **To change the 1% threshold**, edit the last `WHERE miss_rate_pct > 1.0` line in the miss-rate rule's ES|QL query. Make the same change in `kibana/alerting/miss-rate.json`, or the next upgrade will put the old value back.
@@ -282,4 +283,6 @@ The admin account used for installing needs the privileges below. A `superuser` 
 | A rule you expect is missing | Its index patterns must match `logs-*` data streams with `data_stream.dataset` and `namespace` in the events. Rules using a data view, ES\|QL rules and machine learning rules are listed under *Unsupported rules*. |
 | Run failed: `rule_bulk_write_failed_see_step_save_rules` | Writing the rule inventory failed, usually because an ingest pipeline is missing. Run `install` again. |
 | Run failed: `output exceeded the 10 MB size limit` | Too many rules for the step's size limit. The pack allows 64 MB, enough for about 12,000 rules in one space. Raise `max-step-size` on `get_rules` in the workflow YAML if you need more. |
+| *Profiler health*: `no_data`, *No data in logs-\* yet* | Nothing has arrived in `logs-*` data streams. Normal on a new cluster. Results start in the first full clock hour after logs arrive. |
+| *Profiler health*: `no_data`, *none have event.ingested* | Logs arrive, but none carry `event.ingested`, so lag can't be measured. Add the final pipeline described in the `WARN data` row above. |
 | *Profiler health* shows nothing new | The workflow is disabled, or its owner's API key was deleted or expired. Repeat step 7. |

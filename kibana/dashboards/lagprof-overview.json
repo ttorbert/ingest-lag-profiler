@@ -337,7 +337,7 @@
         "title": "Profiler health",
         "data_source": {
           "type": "esql",
-          "query": "FROM lagprof-runs\n| EVAL workflow = COALESCE(lagprof.space.id, \"all spaces\"),\n       ok = CASE(status == \"success\", 1, 0)\n| STATS last_run = MAX(@timestamp), runs = COUNT(*), succeeded = SUM(ok),\n        last_rules_seen = MAX(rules_seen)\n     BY workflow\n| EVAL failed = runs - succeeded\n| KEEP workflow, last_run, runs, failed, last_rules_seen"
+          "query": "FROM lagprof-runs\n| EVAL workflow = COALESCE(lagprof.space.id, \"all spaces\")\n| INLINE STATS latest = MAX(@timestamp) BY workflow\n| EVAL is_last = @timestamp == latest\n| STATS last_run = MAX(@timestamp), runs = COUNT(*),\n        no_data = SUM(CASE(status == \"no_data\", 1, 0)),\n        failed = SUM(CASE(status == \"failed\", 1, 0)),\n        last_status = MAX(CASE(is_last, status, null)),\n        last_note = MAX(CASE(is_last, reason, null)),\n        last_rules_seen = MAX(rules_seen)\n     BY workflow\n| EVAL last_note = CASE(last_status == \"failed\", \"See the error field in lagprof-runs\", last_note)\n| KEEP workflow, last_run, last_status, last_note, runs, no_data, failed, last_rules_seen"
         },
         "rows": [
           {
@@ -348,11 +348,25 @@
         "metrics": [
           {
             "column": "last_run",
-            "label": "Last run"
+            "label": "Last run",
+            "width": 220
+          },
+          {
+            "column": "last_status",
+            "label": "Last status"
+          },
+          {
+            "column": "last_note",
+            "label": "Note",
+            "width": 520
           },
           {
             "column": "runs",
             "label": "Runs"
+          },
+          {
+            "column": "no_data",
+            "label": "No data"
           },
           {
             "column": "failed",
@@ -362,7 +376,8 @@
             "column": "last_rules_seen",
             "label": "Rules seen"
           }
-        ]
+        ],
+        "description": "No data means the run worked but had nothing to measure: no logs in logs-* yet, or none with event.ingested. Note says which."
       }
     }
   ]

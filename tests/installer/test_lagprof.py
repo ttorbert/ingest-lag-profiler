@@ -102,6 +102,15 @@ def make_handler(fake: FakeCluster):
                 return self._send(200, {"columns": [], "values": [[1000, 990]]})
             if path == "/lagprof-runs/_search":
                 return self._send(404, {"error": "index_not_found_exception"})
+            if path.startswith("/_data_stream/") and "*" not in path:
+                if method == "PUT":
+                    fake.store[path] = {}
+                    return self._send(200, {"acknowledged": True})
+                if method == "GET":
+                    return self._send(200, {"data_streams": [{}]}) if path in fake.store else self._send(404, {})
+            if path.startswith("/lagprof-*,") and path.endswith("/_mapping") and method == "PUT":
+                fake.store[path] = body  # mapping update on existing lagprof-* indices
+                return self._send(200, {"acknowledged": True})
             if path.endswith("/_mapping") and path[:-len("/_mapping")] in fake.store:
                 idx = path[:-len("/_mapping")]
                 return self._send(200, {idx.lstrip("/"): {"mappings": fake.store[idx]}})
@@ -366,6 +375,26 @@ class InstallTests(FakeServerCase):
         first_index = next(i for i, p in enumerate(puts) if p.startswith("/_index_template/"))
         comp = puts.index("/_component_template/lagprof-common")
         self.assertLess(comp, first_index)
+
+    def test_component_fields_added_to_existing_indices(self):
+        # Pack updates can add fields; existing indices need them too, or ES|QL panels fail.
+        lagprof.install(self.client, self.rep, lagprof.InstallOptions())
+        puts = [p for m, p in self.fake.requests if m == "PUT"]
+        sync = [p for p in puts if p.startswith("/lagprof-*,-lagprof-rule-streams/_mapping")]
+        self.assertEqual(len(sync), 1, puts)
+        self.assertGreater(puts.index(sync[0]), puts.index("/_component_template/lagprof-common"))
+        body = self.fake.store["/lagprof-*,-lagprof-rule-streams/_mapping"]
+        self.assertIn("reason", body["properties"])
+
+    def test_data_streams_created_empty_after_templates(self):
+        # Dashboard panels fail with "Unknown index" until each data stream exists.
+        lagprof.install(self.client, self.rep, lagprof.InstallOptions())
+        puts = [p for m, p in self.fake.requests if m == "PUT"]
+        made = sorted(p for p in puts if p.startswith("/_data_stream/"))
+        self.assertEqual(made, ["/_data_stream/lagprof-host-lag", "/_data_stream/lagprof-results",
+                                "/_data_stream/lagprof-runs", "/_data_stream/lagprof-stream-stats"])
+        last_template = max(i for i, p in enumerate(puts) if p.startswith("/_index_template/"))
+        self.assertTrue(all(puts.index(p) > last_template for p in made))
 
     def test_per_space_role_and_space_prefixed_rules(self):
         opts = lagprof.InstallOptions(workflow="per-space", space="soc", shared_stats=True)

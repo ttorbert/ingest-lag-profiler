@@ -166,163 +166,7 @@ steps:
               - term: { lagprof.run.id: "{{ execution.id }}" }
 
   # ---------------------------------------------------------------------------
-  # Stage 5 and 6: run the queries and save the rows.
-  # Each query ends with KEEP, so the row positions below are fixed.
-  # Windows are whole clock hours, and document IDs are built from the window,
-  # so rerunning an hour skips rows that already exist.
-  # ---------------------------------------------------------------------------
-  - name: miss_rates
-    type: elasticsearch.request
-    with:
-      method: POST
-      path: /_query
-      body:
-        query: |
-          FROM logs-*
-          | WHERE @timestamp >= DATE_TRUNC(1 hour, NOW()) - 25 hours
-              AND event.ingested >= DATE_TRUNC(1 hour, NOW()) - 1 hour
-              AND event.ingested <  DATE_TRUNC(1 hour, NOW())
-          | EVAL lag_s = DATE_DIFF("seconds", @timestamp, event.ingested)
-          // Per-stream lag figures, computed once on raw events. Named so they don't collide
-          // with fields in the lookup index, which would replace them in the join.
-          | INLINE STATS stream_p50 = PERCENTILE(lag_s, 50),
-                         stream_p95 = PERCENTILE(lag_s, 95),
-                         stream_p99 = PERCENTILE(lag_s, 99),
-                         stream_max = MAX(lag_s)
-               BY data_stream.dataset, data_stream.namespace
-          // Count events per stream and lag second, so rules join to counts, not raw events.
-          // Lags over 2 hours are grouped by minute.
-          | EVAL lag_s = CASE(lag_s > 7200, lag_s - lag_s % 60, lag_s)
-          | STATS n = COUNT(*)
-               BY data_stream.dataset, data_stream.namespace, lag_s,
-                  stream_p50, stream_p95, stream_p99, stream_max
-          | LOOKUP JOIN lagprof-rule-streams ON data_stream.dataset, data_stream.namespace
-          | WHERE lagprof.rule.id IS NOT NULL AND lagprof.rule.timestamp_field == "@timestamp"
-          | EVAL margin_s = lagprof.rule.lookback_s - lagprof.rule.interval_s
-          | EVAL miss = CASE(lag_s <= margin_s, 0.0,
-                             lag_s >= lagprof.rule.lookback_s, 1.0,
-                             TO_DOUBLE(lag_s - margin_s) / lagprof.rule.interval_s)
-          | STATS events = SUM(n),
-                  est_missed = SUM(n * miss),
-                  negative_lag_events = SUM(CASE(lag_s < -60, n, 0)),
-                  lag_p50_s = MAX(stream_p50),
-                  lag_p95_s = MAX(stream_p95),
-                  lag_p99_s = MAX(stream_p99),
-                  lag_max_s = MAX(stream_max)
-               BY lagprof.space.id, lagprof.rule.id, lagprof.rule.name,
-                  lagprof.rule.interval_s, lagprof.rule.lookback_s,
-                  data_stream.dataset, data_stream.namespace
-          | EVAL window_start = DATE_TRUNC(1 hour, NOW()) - 1 hour,
-                 miss_rate_pct = ROUND(est_missed / events * 100, 2),
-                 recommended_lookback_s = GREATEST(
-                   lagprof.rule.interval_s + 60,
-                   lagprof.rule.interval_s + TO_INTEGER(CEIL(lag_p99_s / 60.0)) * 60)
-          | KEEP window_start, lagprof.space.id, lagprof.rule.id, lagprof.rule.name,
-                 lagprof.rule.interval_s, lagprof.rule.lookback_s,
-                 data_stream.dataset, data_stream.namespace,
-                 events, est_missed, miss_rate_pct,
-                 lag_p50_s, lag_p95_s, lag_p99_s, lag_max_s,
-                 negative_lag_events, recommended_lookback_s
-          | SORT miss_rate_pct DESC
-          | LIMIT 10000
-
-  - name: save_miss_rates
-    type: elasticsearch.request
-    with:
-      method: POST
-      path: /_bulk
-      headers:
-        Content-Type: application/x-ndjson
-      body: |
-        {"delete":{"_index":"lagprof-rules","_id":"__lagprof_noop__"}}
-        {% for row in steps.miss_rates.output.values %}{"create":{"_index":"lagprof-results","_id":"{{ row[0] }}:{{ row[2] }}:{{ row[6] }}-{{ row[7] }}"}}
-        {"@timestamp":{{ row[0] | json }},"lagprof":{"run":{"id":"{{ execution.id }}"},"window":{"start":{{ row[0] | json }}},"space":{"id":{{ row[1] | json }}},"rule":{"id":{{ row[2] | json }},"name":{{ row[3] | json }},"interval_s":{{ row[4] | json }},"lookback_s":{{ row[5] | json }}}},"data_stream":{"dataset":{{ row[6] | json }},"namespace":{{ row[7] | json }}},"events":{{ row[8] | json }},"est_missed":{{ row[9] | json }},"miss_rate_pct":{{ row[10] | json }},"lag_p50_s":{{ row[11] | json }},"lag_p95_s":{{ row[12] | json }},"lag_p99_s":{{ row[13] | json }},"lag_max_s":{{ row[14] | json }},"negative_lag_events":{{ row[15] | json }},"recommended_lookback_s":{{ row[16] | json }}}
-        {% endfor %}
-
-  - name: stream_stats
-    type: elasticsearch.request
-    with:
-      method: POST
-      path: /_query
-      body:
-        # Measured events use the ingest-time window. Unmeasured events (no
-        # event.ingested) can only be placed by @timestamp, so they use that.
-        query: |
-          FROM logs-*
-          | WHERE @timestamp >= DATE_TRUNC(1 hour, NOW()) - 25 hours
-          | WHERE (event.ingested >= DATE_TRUNC(1 hour, NOW()) - 1 hour
-                   AND event.ingested < DATE_TRUNC(1 hour, NOW()))
-               OR (event.ingested IS NULL
-                   AND @timestamp >= DATE_TRUNC(1 hour, NOW()) - 1 hour
-                   AND @timestamp < DATE_TRUNC(1 hour, NOW()))
-          | EVAL lag_s = DATE_DIFF("seconds", @timestamp, event.ingested)
-          | STATS events = COUNT(*),
-                  measured_events = COUNT(event.ingested),
-                  lag_p50_s = PERCENTILE(lag_s, 50),
-                  lag_p95_s = PERCENTILE(lag_s, 95),
-                  lag_p99_s = PERCENTILE(lag_s, 99),
-                  lag_max_s = MAX(lag_s),
-                  negative_lag_events = SUM(CASE(lag_s < -60, 1, 0))
-               BY data_stream.dataset, data_stream.namespace
-          | EVAL window_start = DATE_TRUNC(1 hour, NOW()) - 1 hour,
-                 unmeasured_events = events - measured_events
-          | KEEP window_start, data_stream.dataset, data_stream.namespace,
-                 events, unmeasured_events,
-                 lag_p50_s, lag_p95_s, lag_p99_s, lag_max_s, negative_lag_events
-          | LIMIT 10000
-
-  - name: save_stream_stats
-    type: elasticsearch.request
-    with:
-      method: POST
-      path: /_bulk
-      headers:
-        Content-Type: application/x-ndjson
-      body: |
-        {"delete":{"_index":"lagprof-rules","_id":"__lagprof_noop__"}}
-        {% for row in steps.stream_stats.output.values %}{"create":{"_index":"lagprof-stream-stats","_id":"{{ row[0] }}:{{ row[1] }}-{{ row[2] }}"}}
-        {"@timestamp":{{ row[0] | json }},"lagprof":{"run":{"id":"{{ execution.id }}"},"window":{"start":{{ row[0] | json }}}},"data_stream":{"dataset":{{ row[1] | json }},"namespace":{{ row[2] | json }}},"events":{{ row[3] | json }},"unmeasured_events":{{ row[4] | json }},"lag_p50_s":{{ row[5] | json }},"lag_p95_s":{{ row[6] | json }},"lag_p99_s":{{ row[7] | json }},"lag_max_s":{{ row[8] | json }},"negative_lag_events":{{ row[9] | json }}}
-        {% endfor %}
-
-  - name: host_lag
-    type: elasticsearch.request
-    with:
-      method: POST
-      path: /_query
-      body:
-        query: |
-          FROM logs-*
-          | WHERE @timestamp >= DATE_TRUNC(1 hour, NOW()) - 25 hours
-              AND event.ingested >= DATE_TRUNC(1 hour, NOW()) - 1 hour
-              AND event.ingested <  DATE_TRUNC(1 hour, NOW())
-          | EVAL lag_s = DATE_DIFF("seconds", @timestamp, event.ingested)
-          | STATS events = COUNT(*),
-                  lag_p95_s = PERCENTILE(lag_s, 95),
-                  lag_max_s = MAX(lag_s),
-                  negative_lag_events = SUM(CASE(lag_s < -60, 1, 0))
-               BY data_stream.dataset, data_stream.namespace, host.name
-          | WHERE lag_p95_s > 60 OR negative_lag_events > 0
-          | EVAL window_start = DATE_TRUNC(1 hour, NOW()) - 1 hour
-          | KEEP window_start, data_stream.dataset, data_stream.namespace, host.name,
-                 events, lag_p95_s, lag_max_s, negative_lag_events
-          | SORT lag_p95_s DESC
-          | LIMIT 10000
-
-  - name: save_host_lag
-    type: elasticsearch.request
-    with:
-      method: POST
-      path: /_bulk
-      headers:
-        Content-Type: application/x-ndjson
-      body: |
-        {"delete":{"_index":"lagprof-rules","_id":"__lagprof_noop__"}}
-        {% for row in steps.host_lag.output.values %}{"create":{"_index":"lagprof-host-lag","_id":"{{ row[0] }}:{{ row[1] }}-{{ row[2] }}:{{ row[3] }}"}}
-        {"@timestamp":{{ row[0] | json }},"lagprof":{"run":{"id":"{{ execution.id }}"},"window":{"start":{{ row[0] | json }}}},"data_stream":{"dataset":{{ row[1] | json }},"namespace":{{ row[2] | json }}},"host":{"name":{{ row[3] | json }}},"events":{{ row[4] | json }},"lag_p95_s":{{ row[5] | json }},"lag_max_s":{{ row[6] | json }},"negative_lag_events":{{ row[7] | json }}}
-        {% endfor %}
-
-  # ---------------------------------------------------------------------------
-  # Run summary
+  # Run summary counts, recorded by both outcomes below
   # ---------------------------------------------------------------------------
   - name: count_rules
     type: elasticsearch.request
@@ -345,18 +189,223 @@ steps:
       body:
         query: { term: { lagprof.run.id: "{{ execution.id }}" } }
 
-  - name: record_success
+  # ---------------------------------------------------------------------------
+  # Data check. ES|QL rejects a query that names a column no logs-* index maps,
+  # so on a new cluster with no logs yet, or one whose logs have no
+  # event.ingested, the queries below would fail every run. Check first, and
+  # record the run as no_data with a reason instead.
+  # Both searches stop at the first match, so they cost almost nothing.
+  # ---------------------------------------------------------------------------
+  - name: check_logs
     type: elasticsearch.request
     with:
       method: POST
-      path: /lagprof-runs/_doc?pipeline=lagprof-stamp
+      path: /logs-*/_search?ignore_unavailable=true&allow_no_indices=true
       body:
-        lagprof:
-          run: { id: "{{ execution.id }}" }
-          mode: all-spaces
-        spaces_with_rules: "${{ steps.count_rules.output.aggregations.spaces.value }}"
-        rules_seen: "${{ steps.count_rules.output.hits.total.value }}"
-        rules_supported: "${{ steps.count_rules.output.aggregations.supported.doc_count }}"
-        streams_matched: "${{ steps.count_pairs.output.count }}"
-        result_rows: "${{ steps.miss_rates.output.values | size }}"
-        status: success
+        size: 0
+        terminate_after: 1
+        track_total_hits: true
+
+  - name: check_measurable
+    type: elasticsearch.request
+    with:
+      method: POST
+      path: /logs-*/_search?ignore_unavailable=true&allow_no_indices=true
+      body:
+        size: 0
+        terminate_after: 1
+        track_total_hits: true
+        query: { exists: { field: event.ingested } }
+
+  - name: measure
+    type: if
+    condition: "steps.check_measurable.output.hits.total.value > 0"
+    steps:
+      # ---------------------------------------------------------------------------
+      # Stage 5 and 6: run the queries and save the rows.
+      # Each query ends with KEEP, so the row positions below are fixed.
+      # Windows are whole clock hours, and document IDs are built from the window,
+      # so rerunning an hour skips rows that already exist.
+      # ---------------------------------------------------------------------------
+      - name: miss_rates
+        type: elasticsearch.request
+        with:
+          method: POST
+          path: /_query
+          body:
+            query: |
+              FROM logs-*
+              | WHERE @timestamp >= DATE_TRUNC(1 hour, NOW()) - 25 hours
+                  AND event.ingested >= DATE_TRUNC(1 hour, NOW()) - 1 hour
+                  AND event.ingested <  DATE_TRUNC(1 hour, NOW())
+              | EVAL lag_s = DATE_DIFF("seconds", @timestamp, event.ingested)
+              // Per-stream lag figures, computed once on raw events. Named so they don't collide
+              // with fields in the lookup index, which would replace them in the join.
+              | INLINE STATS stream_p50 = PERCENTILE(lag_s, 50),
+                             stream_p95 = PERCENTILE(lag_s, 95),
+                             stream_p99 = PERCENTILE(lag_s, 99),
+                             stream_max = MAX(lag_s)
+                   BY data_stream.dataset, data_stream.namespace
+              // Count events per stream and lag second, so rules join to counts, not raw events.
+              // Lags over 2 hours are grouped by minute.
+              | EVAL lag_s = CASE(lag_s > 7200, lag_s - lag_s % 60, lag_s)
+              | STATS n = COUNT(*)
+                   BY data_stream.dataset, data_stream.namespace, lag_s,
+                      stream_p50, stream_p95, stream_p99, stream_max
+              | LOOKUP JOIN lagprof-rule-streams ON data_stream.dataset, data_stream.namespace
+              | WHERE lagprof.rule.id IS NOT NULL AND lagprof.rule.timestamp_field == "@timestamp"
+              | EVAL margin_s = lagprof.rule.lookback_s - lagprof.rule.interval_s
+              | EVAL miss = CASE(lag_s <= margin_s, 0.0,
+                                 lag_s >= lagprof.rule.lookback_s, 1.0,
+                                 TO_DOUBLE(lag_s - margin_s) / lagprof.rule.interval_s)
+              | STATS events = SUM(n),
+                      est_missed = SUM(n * miss),
+                      negative_lag_events = SUM(CASE(lag_s < -60, n, 0)),
+                      lag_p50_s = MAX(stream_p50),
+                      lag_p95_s = MAX(stream_p95),
+                      lag_p99_s = MAX(stream_p99),
+                      lag_max_s = MAX(stream_max)
+                   BY lagprof.space.id, lagprof.rule.id, lagprof.rule.name,
+                      lagprof.rule.interval_s, lagprof.rule.lookback_s,
+                      data_stream.dataset, data_stream.namespace
+              | EVAL window_start = DATE_TRUNC(1 hour, NOW()) - 1 hour,
+                     miss_rate_pct = ROUND(est_missed / events * 100, 2),
+                     recommended_lookback_s = GREATEST(
+                       lagprof.rule.interval_s + 60,
+                       lagprof.rule.interval_s + TO_INTEGER(CEIL(lag_p99_s / 60.0)) * 60)
+              | KEEP window_start, lagprof.space.id, lagprof.rule.id, lagprof.rule.name,
+                     lagprof.rule.interval_s, lagprof.rule.lookback_s,
+                     data_stream.dataset, data_stream.namespace,
+                     events, est_missed, miss_rate_pct,
+                     lag_p50_s, lag_p95_s, lag_p99_s, lag_max_s,
+                     negative_lag_events, recommended_lookback_s
+              | SORT miss_rate_pct DESC
+              | LIMIT 10000
+
+      - name: save_miss_rates
+        type: elasticsearch.request
+        with:
+          method: POST
+          path: /_bulk
+          headers:
+            Content-Type: application/x-ndjson
+          body: |
+            {"delete":{"_index":"lagprof-rules","_id":"__lagprof_noop__"}}
+            {% for row in steps.miss_rates.output.values %}{"create":{"_index":"lagprof-results","_id":"{{ row[0] }}:{{ row[2] }}:{{ row[6] }}-{{ row[7] }}"}}
+            {"@timestamp":{{ row[0] | json }},"lagprof":{"run":{"id":"{{ execution.id }}"},"window":{"start":{{ row[0] | json }}},"space":{"id":{{ row[1] | json }}},"rule":{"id":{{ row[2] | json }},"name":{{ row[3] | json }},"interval_s":{{ row[4] | json }},"lookback_s":{{ row[5] | json }}}},"data_stream":{"dataset":{{ row[6] | json }},"namespace":{{ row[7] | json }}},"events":{{ row[8] | json }},"est_missed":{{ row[9] | json }},"miss_rate_pct":{{ row[10] | json }},"lag_p50_s":{{ row[11] | json }},"lag_p95_s":{{ row[12] | json }},"lag_p99_s":{{ row[13] | json }},"lag_max_s":{{ row[14] | json }},"negative_lag_events":{{ row[15] | json }},"recommended_lookback_s":{{ row[16] | json }}}
+            {% endfor %}
+
+      - name: stream_stats
+        type: elasticsearch.request
+        with:
+          method: POST
+          path: /_query
+          body:
+            # Measured events use the ingest-time window. Unmeasured events (no
+            # event.ingested) can only be placed by @timestamp, so they use that.
+            query: |
+              FROM logs-*
+              | WHERE @timestamp >= DATE_TRUNC(1 hour, NOW()) - 25 hours
+              | WHERE (event.ingested >= DATE_TRUNC(1 hour, NOW()) - 1 hour
+                       AND event.ingested < DATE_TRUNC(1 hour, NOW()))
+                   OR (event.ingested IS NULL
+                       AND @timestamp >= DATE_TRUNC(1 hour, NOW()) - 1 hour
+                       AND @timestamp < DATE_TRUNC(1 hour, NOW()))
+              | EVAL lag_s = DATE_DIFF("seconds", @timestamp, event.ingested)
+              | STATS events = COUNT(*),
+                      measured_events = COUNT(event.ingested),
+                      lag_p50_s = PERCENTILE(lag_s, 50),
+                      lag_p95_s = PERCENTILE(lag_s, 95),
+                      lag_p99_s = PERCENTILE(lag_s, 99),
+                      lag_max_s = MAX(lag_s),
+                      negative_lag_events = SUM(CASE(lag_s < -60, 1, 0))
+                   BY data_stream.dataset, data_stream.namespace
+              | EVAL window_start = DATE_TRUNC(1 hour, NOW()) - 1 hour,
+                     unmeasured_events = events - measured_events
+              | KEEP window_start, data_stream.dataset, data_stream.namespace,
+                     events, unmeasured_events,
+                     lag_p50_s, lag_p95_s, lag_p99_s, lag_max_s, negative_lag_events
+              | LIMIT 10000
+
+      - name: save_stream_stats
+        type: elasticsearch.request
+        with:
+          method: POST
+          path: /_bulk
+          headers:
+            Content-Type: application/x-ndjson
+          body: |
+            {"delete":{"_index":"lagprof-rules","_id":"__lagprof_noop__"}}
+            {% for row in steps.stream_stats.output.values %}{"create":{"_index":"lagprof-stream-stats","_id":"{{ row[0] }}:{{ row[1] }}-{{ row[2] }}"}}
+            {"@timestamp":{{ row[0] | json }},"lagprof":{"run":{"id":"{{ execution.id }}"},"window":{"start":{{ row[0] | json }}}},"data_stream":{"dataset":{{ row[1] | json }},"namespace":{{ row[2] | json }}},"events":{{ row[3] | json }},"unmeasured_events":{{ row[4] | json }},"lag_p50_s":{{ row[5] | json }},"lag_p95_s":{{ row[6] | json }},"lag_p99_s":{{ row[7] | json }},"lag_max_s":{{ row[8] | json }},"negative_lag_events":{{ row[9] | json }}}
+            {% endfor %}
+
+      - name: host_lag
+        type: elasticsearch.request
+        with:
+          method: POST
+          path: /_query
+          body:
+            query: |
+              FROM logs-*
+              | WHERE @timestamp >= DATE_TRUNC(1 hour, NOW()) - 25 hours
+                  AND event.ingested >= DATE_TRUNC(1 hour, NOW()) - 1 hour
+                  AND event.ingested <  DATE_TRUNC(1 hour, NOW())
+              | EVAL lag_s = DATE_DIFF("seconds", @timestamp, event.ingested)
+              | STATS events = COUNT(*),
+                      lag_p95_s = PERCENTILE(lag_s, 95),
+                      lag_max_s = MAX(lag_s),
+                      negative_lag_events = SUM(CASE(lag_s < -60, 1, 0))
+                   BY data_stream.dataset, data_stream.namespace, host.name
+              | WHERE lag_p95_s > 60 OR negative_lag_events > 0
+              | EVAL window_start = DATE_TRUNC(1 hour, NOW()) - 1 hour
+              | KEEP window_start, data_stream.dataset, data_stream.namespace, host.name,
+                     events, lag_p95_s, lag_max_s, negative_lag_events
+              | SORT lag_p95_s DESC
+              | LIMIT 10000
+
+      - name: save_host_lag
+        type: elasticsearch.request
+        with:
+          method: POST
+          path: /_bulk
+          headers:
+            Content-Type: application/x-ndjson
+          body: |
+            {"delete":{"_index":"lagprof-rules","_id":"__lagprof_noop__"}}
+            {% for row in steps.host_lag.output.values %}{"create":{"_index":"lagprof-host-lag","_id":"{{ row[0] }}:{{ row[1] }}-{{ row[2] }}:{{ row[3] }}"}}
+            {"@timestamp":{{ row[0] | json }},"lagprof":{"run":{"id":"{{ execution.id }}"},"window":{"start":{{ row[0] | json }}}},"data_stream":{"dataset":{{ row[1] | json }},"namespace":{{ row[2] | json }}},"host":{"name":{{ row[3] | json }}},"events":{{ row[4] | json }},"lag_p95_s":{{ row[5] | json }},"lag_max_s":{{ row[6] | json }},"negative_lag_events":{{ row[7] | json }}}
+            {% endfor %}
+
+      - name: record_success
+        type: elasticsearch.request
+        with:
+          method: POST
+          path: /lagprof-runs/_doc?pipeline=lagprof-stamp
+          body:
+            lagprof:
+              run: { id: "{{ execution.id }}" }
+              mode: all-spaces
+            spaces_with_rules: "${{ steps.count_rules.output.aggregations.spaces.value }}"
+            rules_seen: "${{ steps.count_rules.output.hits.total.value }}"
+            rules_supported: "${{ steps.count_rules.output.aggregations.supported.doc_count }}"
+            streams_matched: "${{ steps.count_pairs.output.count }}"
+            result_rows: "${{ steps.miss_rates.output.values | size }}"
+            status: success
+    else:
+      - name: record_no_data
+        type: elasticsearch.request
+        with:
+          method: POST
+          path: /lagprof-runs/_doc?pipeline=lagprof-stamp
+          body:
+            lagprof:
+              run: { id: "{{ execution.id }}" }
+              mode: all-spaces
+            spaces_with_rules: "${{ steps.count_rules.output.aggregations.spaces.value }}"
+            rules_seen: "${{ steps.count_rules.output.hits.total.value }}"
+            rules_supported: "${{ steps.count_rules.output.aggregations.supported.doc_count }}"
+            streams_matched: "${{ steps.count_pairs.output.count }}"
+            result_rows: 0
+            status: no_data
+            reason: "{% if steps.check_logs.output.hits.total.value > 0 %}Logs found in logs-*, but none have event.ingested, so lag can't be measured. Set event.ingested at ingest (see the setup guide).{% else %}No data in logs-* yet. Results start in the first full hour after logs arrive.{% endif %}"

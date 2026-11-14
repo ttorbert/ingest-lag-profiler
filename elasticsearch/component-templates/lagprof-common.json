@@ -60,7 +60,8 @@
         "streams_matched": { "type": "long" },
         "result_rows": { "type": "long" },
         "status": { "type": "keyword" },
-        "error": { "type": "match_only_text" }
+        "error": { "type": "match_only_text" },
+        "reason": { "type": "keyword", "ignore_above": 1024 }
       }
     }
   }
